@@ -1,0 +1,190 @@
+---
+title: "8106hw3"
+author: "Ze Li"
+output: pdf_document
+---
+
+```{r library, echo = T, message = FALSE, results='hide', warning=FALSE}
+library(caret)
+library(glmnet)
+library(tidymodels)
+library(mlbench)
+library(pROC)
+library(pdp)
+library(vip)
+library(AppliedPredictiveModeling)
+library(MASS)
+library(ggplot2)
+```
+
+```{r data import}
+auto = read.csv("/Users/zeze/Library/Mobile Documents/com~apple~CloudDocs/2024/24S BIST P8106 DS II/hw3/auto.csv")
+head(auto)
+indexTrain <- createDataPartition(y = auto$mpg_cat, p = 0.7, list = FALSE)
+train <- auto[indexTrain, ]
+test <- auto[-indexTrain, ]
+head(train)
+```
+
+**(a) Perform a logistic regression analysis using the training data. Are there redundant predictors in your model? If so, identify them. If none is present, please provide an explanation.**
+
+```{r enet}
+set.seed(2024)
+ctrl1 <- trainControl(method = "cv", number = 10)
+enet.caret.fit <- train(mpg_cat ~ .,
+                   data = train,
+                   method = "glmnet",
+                  tuneGrid = expand.grid(alpha = seq(0, 1, length = 21), 
+                                         lambda = exp(seq(8, -2, length = 100))),
+                  trControl = ctrl1)
+enet.caret.fit$bestTune
+
+myCol <- rainbow(25)
+myPar <- list(superpose.symbol = list(col = myCol),
+              superpose.line = list(col = myCol))
+
+plot(enet.caret.fit, par.settings = myPar)
+
+# coefficients in the final model
+coef(enet.caret.fit$finalModel, enet.caret.fit$bestTune$lambda)
+```
+
+In this model, the coefficient for acceleration is marked as missing (.), indicating that it was excluded from the final model. This suggests that acceleration might be considered redundant by the Elastic Net regularization process.
+
+```{r plr}
+ctrl <- trainControl(method = "cv", number = 10,
+                     summaryFunction = twoClassSummary,
+                     classProbs = TRUE)
+glmnGrid <- expand.grid(.alpha = seq(0, 1, length = 21),
+                        .lambda = exp(seq(-8, 5, length = 50)))
+set.seed(2024)
+model.glmn <- train(x = train[1:7],
+                    y = train$mpg_cat,
+                    method = "glmnet",
+                    tuneGrid = glmnGrid,
+                    metric = "ROC",
+                    trControl = ctrl)
+
+model.glmn$bestTune
+
+myCol <- rainbow(25)
+myPar <- list(superpose.symbol = list(col = myCol),
+              superpose.line = list(col = myCol))
+
+plot(model.glmn, par.settings = myPar, xTrans = function(x) log(x))
+
+coef(model.glmn$finalModel, model.glmn$bestTune$lambda)
+```
+
+In this model, the coefficient for acceleration is marked as missing (.), indicating that it was excluded from the final model. This suggests that acceleration might be considered redundant by the penalized logistic regression.
+
+**(b) Based on the model in (a), set a probability threshold to determine the class labels and compute the confusion matrix using the test data. Briefly interpret what the confusion matrix reveals about your model’s performance**
+
+```{r enet confusion matrix}
+enet.caret.predict <- predict(enet.caret.fit, newdata = test, type = "prob")[,2]
+threshold <- 0.5
+e.predicted_class <- ifelse(enet.caret.predict >= threshold, "high", "low")
+conf_matrix <- table(test$mpg_cat, e.predicted_class)
+conf_matrix
+```
+
+```{r plr confusion matrix}
+penalized_predict <- predict(model.glmn, newdata = test, type = "prob")[,2]
+threshold <- 0.5
+p.predicted_class <- ifelse(penalized_predict >= threshold, "high", "low")
+conf_matrix <- table(test$mpg_cat, p.predicted_class)
+conf_matrix
+```
+
+**(c) Train a multivariate adaptive regression spline (MARS) model. Does the MARS model improve the prediction performance compared to logistic regression?**
+
+```{r mars, warning = FALSE}
+set.seed(2024)
+ctrl <- trainControl(method = "cv", number = 10,
+                     summaryFunction = twoClassSummary,
+                     classProbs = TRUE)
+model.mars <- train(x = train[1:7],
+                    y = train$mpg_cat,
+                    method = "earth",
+                    tuneGrid = expand.grid(degree = 1:4, 
+                                           nprune = 2:20),
+                    metric = "ROC",
+                    trControl = ctrl)
+
+plot(model.mars)
+
+coef(model.mars$finalModel) 
+
+vip(model.mars$finalModel, type = "nsubsets")
+vip(model.mars$finalModel, type = "rss")
+
+mars_predict <- predict(model.glmn, newdata = test, type = "prob")[,2]
+threshold <- 0.5
+m.predicted_class <- ifelse(mars_predict >= threshold, "high", "low")
+conf_matrix <- table(test$mpg_cat, m.predicted_class)
+conf_matrix
+```
+
+It seems that both models are performing poorly, as they have high numbers of false predictions. MARS improves little compare with enet model.
+
+**(d) Perform linear discriminant analysis using the training data. Plot the linear discriminant variable(s).**
+
+```{r lda}
+lda.fit <- lda(mpg_cat ~ ., data = train)
+plot(lda.fit)
+
+ctrl2 <- trainControl(method = "repeatedcv", repeats = 5, 
+                      summaryFunction = twoClassSummary, 
+                      classProbs = TRUE)
+
+set.seed(11)
+model.lda <- train(x = train[, 1:7],
+                   y = train$mpg_cat,
+                   method = "lda",
+                   metric = "ROC",
+                   trControl = ctrl2)
+```
+
+**(e) Which model will you use to predict the response variable? Plot its ROC curve using the test data. Report the AUC and the misclassification error rate.**
+
+```{r roc auc}
+enet.pred <- predict(enet.caret.fit, newdata = test, type = "prob")[,2]
+plr.pred <- predict(model.glmn, newdata = test, type = "prob")[,2]
+mars.pred <- predict(model.mars, newdata = test, type = "prob")[,2]
+lda.pred <- predict(model.lda, newdata = test, type = "prob")[,2]
+
+roc.enet <- roc(test$mpg_cat, enet.pred)
+roc.plr <- roc(test$mpg_cat, plr.pred)
+roc.mars <- roc(test$mpg_cat, mars.pred)
+roc.lda <- roc(test$mpg_cat, lda.pred)
+
+auc <- c(roc.enet$auc[1], roc.plr$auc[1], 
+         roc.mars$auc[1], roc.lda$auc[1])
+
+modelNames <- c("enet","plr","mars","lda")
+
+ggroc(list(roc.enet, roc.plr, roc.mars, roc.lda), legacy.axes = TRUE) + 
+  scale_color_discrete(labels = paste0(modelNames, " (", round(auc,3),")"),
+                       name = "Models (AUC)") +
+  geom_abline(intercept = 0, slope = 1, color = "grey")
+```
+
+The auc of elastic net model, penalized logistic regression, multivariate adaptive regression spline and linear discriminant analysis are `r auc`.
+
+The Penalized Logistic Regression (plr) model has the highest Area Under the Curve (AUC) value at 0.9652.
+
+```{r}
+test_class = ifelse(test$mpg_cat > 0.5, "high", "low")
+e.misclass_error_rate <- mean(e.predicted_class != test_class)
+e.misclass_error_rate
+p.misclass_error_rate <- mean(p.predicted_class != test_class)
+p.misclass_error_rate
+m.predicted_class <- ifelse(mars.pred >= threshold, "high", "low")
+m.misclass_error_rate <- mean(m.predicted_class != test_class)
+m.misclass_error_rate
+l.predicted_class <- ifelse(lda.pred >= threshold, "high", "low")
+l.misclass_error_rate <- mean(l.predicted_class != test_class)
+l.misclass_error_rate
+```
+
+Furthermore, the auc of elastic net model, penalized logistic regression, multivariate adaptive regression spline and linear discriminant analysis are `r e.misclass_error_rate`, `r p.misclass_error_rate`, `r m.misclass_error_rate` and `r l.misclass_error_rate`. PLR has the lowest misclassification error rate.

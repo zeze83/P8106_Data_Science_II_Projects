@@ -1,0 +1,216 @@
+---
+title: "8106hw2"
+author: "Ze Li"
+output: pdf_document
+---
+
+```{r library, echo = T, message = FALSE, results='hide', warning=FALSE}
+library(caret)
+library(splines)
+library(tidymodels)
+library(mgcv)
+library(pdp)
+library(earth)
+library(tidyverse)
+library(ggplot2)
+```
+
+Partition the dataset into two parts: training data (80%) and test data (20%)
+
+```{r data}
+college=read.csv("/Users/zeze/Library/Mobile Documents/com~apple~CloudDocs/2024/24S BIST P8106 DS II/hw2/College.csv")
+indexTrain <- createDataPartition(y = college$Outstate, p = 0.8, list = FALSE)
+train <- college[indexTrain, ]
+test <- college[-indexTrain, ]
+head(train)
+
+# matrix of predictors 
+x_train <- model.matrix(Outstate ~ . - College, train)[, -1]
+head(x_train)
+# vector of response
+y_train <- train$Outstate
+# matrix of predictors 
+x_test <- model.matrix(Outstate ~ . - College, test)[, -1]
+# vector of response
+y_test <- test$Outstate
+```
+
+## Smoothing spline
+
+(a) Fit smoothing spline models to predict out-of-state tuition (Outstate) using the percentage
+of alumni who donate (perc.alumni) as the only predictor, across a range of degrees of
+freedom. Plot the model fits for each degree of freedom. Describe the observed patterns
+that emerge with varying degrees of freedom. Select an appropriate degree of freedom for
+the model and plot this optimal fit. Explain the criteria you used to determine the best
+choice of degree of freedom.
+
+## Polynomial regression
+
+```{r df fit}
+fit1 <- lm(Outstate ~ perc.alumni, data = train)
+fit2 <- lm(Outstate ~ poly(perc.alumni,2), data = train) 
+fit3 <- lm(Outstate ~ poly(perc.alumni,3), data = train)
+fit4 <- lm(Outstate ~ poly(perc.alumni,4), data = train) 
+fit5 <- lm(Outstate ~ poly(perc.alumni,5), data = train)
+anova(fit1, fit2, fit3, fit4, fit5)
+```
+
+Use `anova()` to test the null hypothesis that a simpler model is sufficient to explain the data against the alternative hypothesis that a more complex model is required. In this case, we need a more complex model.
+
+## smoothing.spline
+
+```{r smooth}
+perc.alumni.grid <- seq(from = -10, to = 110, by = 1)
+fit.ss <- smooth.spline(train$perc.alumni, train$Outstate)
+fit.ss$df
+fit.ss2 <- smooth.spline(train$perc.alumni, train$Outstate,df=2)
+fit.ss3 <- smooth.spline(train$perc.alumni, train$Outstate,df=3)
+fit.ss4 <- smooth.spline(train$perc.alumni, train$Outstate,df=4)
+fit.ss5 <- smooth.spline(train$perc.alumni, train$Outstate,df=5)
+fit.ss6 <- smooth.spline(train$perc.alumni, train$Outstate,df=6)
+
+pred.ss <- predict(fit.ss2,x = perc.alumni.grid)
+pred.ss2 <- predict(fit.ss2,x = perc.alumni.grid)
+pred.ss3 <- predict(fit.ss3,x = perc.alumni.grid)
+pred.ss4 <- predict(fit.ss4,x = perc.alumni.grid)
+pred.ss5 <- predict(fit.ss5,x = perc.alumni.grid)
+pred.ss6 <- predict(fit.ss6,x = perc.alumni.grid)
+
+pred.ss.df <- data.frame(pred = pred.ss2$y,perc.alumni = perc.alumni.grid)
+pred.ss2.df <- data.frame(pred = pred.ss2$y,perc.alumni = perc.alumni.grid)
+pred.ss3.df <- data.frame(pred = pred.ss3$y,perc.alumni = perc.alumni.grid)
+pred.ss4.df <- data.frame(pred = pred.ss4$y,perc.alumni = perc.alumni.grid)
+pred.ss5.df <- data.frame(pred = pred.ss5$y,perc.alumni = perc.alumni.grid)
+pred.ss6.df <- data.frame(pred = pred.ss6$y,perc.alumni = perc.alumni.grid)
+
+p <- ggplot(data = train, aes(x = perc.alumni, y = Outstate)) +
+     geom_point(color = rgb(.2, .4, .2, .5))
+
+p +
+geom_line(aes(x = perc.alumni, y = pred), data = pred.ss.df,
+          color = rgb(.8, .1, .8, 1)) + theme_bw() +
+geom_line(aes(x = perc.alumni, y = pred), data = pred.ss2.df,
+          color = rgb(.8, .1, .1, 1)) + theme_bw() +
+geom_line(aes(x = perc.alumni, y = pred), data = pred.ss3.df,
+          color = rgb(.1, .8, .1, 1)) + theme_bw() +
+geom_line(aes(x = perc.alumni, y = pred), data = pred.ss4.df,
+          color = rgb(.1, .1, .8, 1)) + theme_bw() +
+geom_line(aes(x = perc.alumni, y = pred), data = pred.ss5.df,
+          color = rgb(.8, .8, .1, 1)) + theme_bw() +
+geom_line(aes(x = perc.alumni, y = pred), data = pred.ss6.df,
+          color = rgb(.1, .8, .8, 1)) + theme_bw()
+```
+
+We can see that the model starts to follow the noise in the data rather than the underlying trend as the degree of freedom increases. The best degree of freedom should strike a balance between flexibility and smoothness; it fits the general trend of the data without overfitting. This is typically done using a criterion such as the AIC, BIC, or Cross-Validation for smoothing splines. In this case, the best fit degree of freedom is `r fit.ss$df`.
+
+## MARS
+
+(b) Train a multivariate adaptive regression spline (MARS) model to predict the response
+variable. Report the regression function. Present the partial dependence plot of an arbitrary
+predictor in your model. Report the test error.
+
+```{r mars}
+ctrl1 <- trainControl(method = "cv", number = 10)
+mars_grid <- expand.grid(degree = 1:3, 
+                         nprune = 2:20)
+
+set.seed(2)
+mars.fit <- train(x_train, y_train,
+                  method = "earth",
+                  tuneGrid = mars_grid,
+                  trControl = ctrl1)
+
+ggplot(mars.fit)
+
+mars.fit$bestTune
+
+coef(mars.fit$finalModel) 
+```
+
+The regression function's coefficient is `r coef(mars.fit$finalModel) `. 
+
+Therefore, Outstate = 13046.3266 - 0.5971 * h(15411-Expend) - 31.6804 * h(80-Grad.Rate) -1.0922 * h(4725-Room.Board) +1.1726 * h(1400-Personal) - -1.5732 * h(1263-F.Undergrad) + 0.4923 * h(Apps-1416) -30.1078 * h(51-perc.alumni) + 64.4511 * h(PhD-79) -1.7573 * h(Enroll-1462) + 3.8888 * h(1462-Enroll) -1.1475 * h(1557-Accept).
+
+The partial dependence plot of an arbitrary predictor is
+
+```{r partial dependence plot}
+p1 <- pdp::partial(mars.fit, pred.var = c("perc.alumni"), grid.resolution = 10) %>% autoplot()
+p1
+```
+
+The test error is
+
+```{r mars rmse}
+mars.pred <- predict(mars.fit, newdata = x_test)
+sqrt(mean((y_test - mars.pred)^2))
+```
+
+
+## GAM
+
+(c) Construct a generalized additive model (GAM) to predict the response variable. Does your
+GAM model include all the predictors? For the nonlinear terms included in your model,
+generate plots to visualize these relationships and discuss your observations. Report the
+test error.
+
+```{r gam m1 m2}
+gam.m1 <- gam(Outstate ~ perc.alumni + Apps + Accept + Enroll 
+              + Top10perc + Top25perc + F.Undergrad + P.Undergrad + Room.Board 
+              + Books + Personal + PhD + Terminal + S.F.Ratio + Expend + Grad.Rate,
+              data = train)
+gam.m2 <- gam(Outstate ~ s(perc.alumni) + Apps + Accept + Enroll 
+              + Top10perc + Top25perc + F.Undergrad + P.Undergrad + Room.Board 
+              + Books + Personal + PhD + Terminal + S.F.Ratio + Expend + Grad.Rate,
+              data = train)
+
+anova(gam.m1, gam.m2, test = "F")
+plot(gam.m2)
+```
+
+```{r gam.fit}
+ctrl1 <- trainControl(method = "cv", number = 10)
+
+set.seed(2)
+gam.fit <- train(x_train, y_train,
+                 method = "gam",
+                 tuneGrid = data.frame(method = "GCV.Cp", select = c(TRUE,FALSE)),
+                 trControl = ctrl1)
+
+gam.fit$bestTune
+
+gam.fit$finalModel
+
+par(mfrow = c(2,2))
+plot(gam.fit$finalModel)
+```
+
+The GAM model includes all the predictors. A straight, horizontal line indicates no significant relationship, such as perc.alumni, Terminal, Books, Grad.Rate, Top10perc, PhD, Top25perc, Personal, P.Undergrad, and Room.Board.
+
+However, curves or non-horizontal lines suggest nonlinear associations, like S.F.Ratio, F.Undergrad, Accept, Apps, and Expend.
+
+Also, there are straight non-horizontal lines suggest linearity relationship, such as Enroll.
+
+The test error of gam is
+
+```{r gam rmse}
+gam.pred <- predict(gam.fit, newdata = x_test)
+sqrt(mean((y_test - gam.pred)^2))
+```
+
+(d) In this dataset, would you favor a MARS model over a linear model for predicting out-ofstate tuition? 
+If so,why? More broadly, in general applications, do you consider a MARS model to be superior to a linear model? Please share your reasoning.
+
+```{r linear}
+set.seed(2)
+lm.fit = train(x_train, y_train,
+                method = "lm",
+                trControl = ctrl1)
+```
+
+```{r}
+bwplot(resamples(list(mars = mars.fit,
+                      lm = lm.fit)), 
+                 metric = "RMSE")
+```
+
+Based on this boxplot, the MARS model appears to perform better in terms of having a lower median RMSE, which suggests it is making more accurate predictions on average. A linear model is typically more appropriate when the relationships between the predictors and the response variable are linear. However, when the relationships are not linear or are more complex, MARS model is better.

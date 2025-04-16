@@ -1,0 +1,375 @@
+---
+title: "8106mid"
+author: "Ze Li"
+output: pdf_document
+---
+
+```{r library, echo = T, message = FALSE, results='hide', warning=FALSE}
+library(ggplot2)
+library(MASS)
+library(glmnet)
+library(rsample)
+library(corrplot)
+library(caret)
+library(mgcv)
+library(tidyverse)
+library(earth)
+library(Formula)
+library(plotmo)
+library(plotrix)
+library(TeachingDemos)
+library(gridExtra)
+library(patchwork)
+```
+
+
+```{r data}
+load("/Users/zeze/Library/Mobile Documents/com~apple~CloudDocs/2024/24S BIST P8106 DS II/midtermproject/recovery.RData")
+dat <- as.data.frame(dat)
+head(dat)
+summary(dat)
+ggplot(dat, aes(x = dat$recovery_time)) + geom_histogram(binwidth = 2)
+```
+
+## Exploratary Data Analysis
+
+
+### Univariate Analysis
+```{r Univariate Analysis}
+# Histogram for Age
+p1 <- ggplot(dat, aes(x = age)) +
+  geom_histogram(binwidth = 5, fill = "#4F81BD", color = "black") +
+  labs(title = "Distribution of Age", x = "Age", y = "Frequency")
+
+# Histogram for Height
+p2 <- ggplot(dat, aes(x = height)) +
+  geom_histogram(binwidth = 2, fill = "#1F497D", color = "black") +
+  labs(title = "Histogram of Height", x = "Height (cm)", y = "Count")
+
+# Density Plot for Weight
+p3 <- ggplot(dat, aes(x = weight)) +
+  geom_density(fill = "#C0504D") +
+  labs(title = "Density Plot of Weight", x = "Weight (kg)", y = "Density")
+
+# Density Plot for LDL
+p4 <- ggplot(dat, aes(x = LDL)) +
+  geom_density(fill = "#E56B70") +
+  labs(title = "Density Plot of LDL", x = "LDL (mg/dL)", y = "Density")
+
+# Boxplot for BMI
+p5 <- ggplot(dat, aes(y = bmi)) +
+  geom_boxplot(fill = "#F79646") +
+  labs(title = "Boxplot of BMI", x = "", y = "BMI (kg/m^2)")
+
+# Boxplot for SBP
+p6 <- ggplot(dat, aes(y = SBP)) +  # Corrected to display SBP instead of BMI again
+  geom_boxplot(fill = "#9BBB59") +
+  labs(title = "Boxplot of SBP", x = "", y = "SBP (mmHg)")
+
+# Histogram for Recovery Time
+p7 <- ggplot(dat, aes(x = recovery_time)) +
+  geom_histogram(binwidth = 2, fill = "#F4C842", color = "black") +
+  labs(title = "Histogram of Recovery Time", x = "Recovery Time (days)", y = "Count")
+
+# Arranging the plots in a 2x3 grid
+plot_grid <- p1 + p2 + p3 + p4 + p5 + p6 + 
+  plot_layout(ncol = 3, byrow = TRUE) 
+
+# Display the combined plot
+plot_grid
+p7
+
+```
+
+```{r}
+# Bar Plot for Gender
+p1 <- ggplot(dat, aes(x = gender)) +
+  geom_bar(fill = "#D291BC") + 
+  labs(title = "Distribution of Gender", x = "Gender", y = "Count")
+
+# Bar Plot for Race
+p2 <- ggplot(dat, aes(x = race)) +
+  geom_bar(fill = "#AED6F1") + 
+  labs(title = "Distribution of Race", x = "Race", y = "Count")
+
+# Bar Plot for Smoking Status
+p3 <- ggplot(dat, aes(x = smoking)) +
+  geom_bar(fill = "#D2B48C") + 
+  labs(title = "Distribution of Smoking Status", x = "Smoking Status", y = "Count")
+
+# Bar Plot for Hypertension
+p4 <- ggplot(dat, aes(x = hypertension)) +
+  geom_bar(fill = "#FF7F50") +
+  labs(title = "Distribution of Hypertension", x = "Hypertension", y = "Count")
+
+# Bar Plot for Diabetes
+p5 <- ggplot(dat, aes(x = diabetes)) +
+  geom_bar(fill = "#90EE90") + 
+  labs(title = "Distribution of Diabetes", x = "Diabetes", y = "Count")
+
+# Bar plot for Vaccine
+p6 <- ggplot(dat, aes(x = vaccine)) +
+  geom_bar(fill = "#A52A2A") + 
+  labs(title = "Distribution of Vaccine", x = "Vaccine", y = "Count")
+
+# Bar plot for Severity
+p7 <- ggplot(dat, aes(x = severity)) +
+  geom_bar(fill = "#FFC0CB") + 
+  labs(title = "Distribution of Severity", x = "Severity", y = "Count")
+
+# Bar plot for Study
+p8 <- ggplot(dat, aes(x = study)) +
+  geom_bar(fill = "#FFA500") + 
+  labs(title = "Distribution of Study", x = "Study", y = "Count")
+
+# Combine the plots into a 2x4 grid
+plot_grid <- p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 +
+  plot_layout(ncol = 4, byrow = TRUE)
+
+# Display the combined plot
+plot_grid
+```
+
+### bivariate visualization
+
+```{r bivariate visualization}
+# matrix of predictors 
+x.orig <- model.matrix(recovery_time ~ ., dat[,-1])[, -1]
+# vector of response
+y.orig <- dat$recovery_time
+
+theme1 <- trellis.par.get()
+theme1$plot.symbol$col <- rgb(.2, .4, .2, .5)
+theme1$plot.symbol$pch <- 16
+theme1$plot.line$col <- rgb(.8, .1, .1, 1)
+theme1$plot.line$lwd <- 2
+theme1$strip.background$col <- rgb(.0, .2, .6, .2)
+trellis.par.set(theme1)
+
+featurePlot(x.orig[, -c(2, 3, 4, 5, 6, 7, 11, 12, 15, 16, 17)], y.orig, plot = "scatter", labels = c("", "Y"),
+            type = c("p"), layout = c(3, 3))
+
+corrplot(cor(x.orig), method = "circle", type = "full")
+
+```
+
+# linear regression
+
+```{r model1 lm}
+# Fit a multiple linear regression model
+model1 <- lm(recovery_time ~ ., data = dat)
+
+# Summarize the model
+summary(model1)
+```
+
+## cross validation
+
+```{r split}
+set.seed(7890)
+data_split <- initial_split(dat, prop = 0.8)
+
+# Extract the training and test data
+train <- training(data_split)
+test <- testing(data_split)
+# matrix of predictors (glmnet uses input matrix)
+x <- model.matrix(recovery_time ~ ., dat)[,-1]
+# vector of response
+y <- dat$recovery_time
+corrplot(cor(x), method = "circle", type = "full")
+x_train <- model.matrix(recovery_time ~ ., train[,-1])[,-1]
+y_train <- train$recovery_time
+x_test <- model.matrix(recovery_time ~ ., test[,-1])[,-1]
+y_test <- test$recovery_time
+```
+
+## ridge regression
+
+```{r}
+ctrl1 <- trainControl(method ="cv",number=10)
+set.seed(7890)
+ridge.fit <- train(recovery_time ~ .,
+                   data = train[,-1],
+                   method = "glmnet",
+                   tuneGrid = expand.grid(alpha = 0, 
+                                          lambda = exp(seq(6, 0, length = 100))),
+                   trControl = ctrl1)
+                   
+plot(ridge.fit,xTrans =log)
+
+ridge.fit$bestTune
+coef(ridge.fit$finalModel,s=ridge.fit$bestTune$lambda)
+```
+
+## LASSO regression
+
+```{r lasso}
+# LASSO regression
+## lasso alpha = 1
+cv.lasso <- cv.glmnet(x, y, 
+                      alpha = 1, 
+                      lambda = exp(seq(6, -5, length = 100)))
+
+cv.lasso$lambda.min
+
+# trace plot
+plot(cv.lasso$glmnet.fit, xvar = "lambda", label=TRUE)
+predict(cv.lasso, s = "lambda.min", type = "coefficients")
+
+head(predict(cv.lasso, newx = model.matrix(recovery_time ~ .,dat)[,-1], 
+             s = "lambda.min", type = "response"))
+
+ctrl1 <- trainControl(method = "cv", number = 10)
+
+set.seed(7890)
+lasso.fit <- train(recovery_time ~ .,
+                   data = train[,-1],
+                   method = "glmnet",
+                   tuneGrid = expand.grid(alpha = 1, 
+                                          lambda = exp(seq(3, -5, length = 100))),
+                   trControl = ctrl1)
+
+# visualization
+plot(lasso.fit, xTrans = log)
+
+# tuning parameter
+lasso.fit$bestTune
+```
+
+## elastic net model
+
+```{r enet}
+set.seed(7890)
+ctrl1 <- trainControl(method = "cv", number = 10)
+enet.caret.fit <- train(recovery_time ~ .,
+                   data = train[,-1],
+                   method = "glmnet",
+                  tuneGrid = expand.grid(alpha = seq(0, 1, length = 21), 
+                                         lambda = exp(seq(3, -5, length = 100))),
+                  trControl = ctrl1)
+enet.caret.fit$bestTune
+
+myCol <- rainbow(25)
+myPar <- list(superpose.symbol = list(col = myCol),
+              superpose.line = list(col = myCol))
+
+plot(enet.caret.fit, par.settings = myPar)
+
+# coefficients in the final model
+coef(enet.caret.fit$finalModel, enet.caret.fit$bestTune$lambda)
+```
+
+# partial least squares
+
+```{r pls}
+set.seed(7890)
+pls.fit <- train(x_train, y_train,
+                 method = "pls",
+                 tuneGrid = data.frame(ncomp = 1:17),
+                 trControl = ctrl1,
+                 preProcess = c("center", "scale"))
+
+ggplot(pls.fit, highlight = TRUE)
+pls.fit$bestTune
+```
+
+# principal component regression
+
+```{r pcr}
+set.seed(7890)
+pcr.fit <- train(x_train, y_train, method = "pcr",
+                 tuneGrid = data.frame(ncomp = 1:18),
+                 trControl = ctrl1,
+                 preProcess = c("center", "scale"))
+pcr.fit$bestTune
+```
+
+# MARS
+
+```{r mars}
+ctrl1 <- trainControl(method = "cv", number = 10)
+mars_grid <- expand.grid(degree = 1:3, 
+                         nprune = 2:25)
+
+set.seed(7890)
+mars.fit <- train(x_train, y_train,
+                  method = "earth",
+                  tuneGrid = mars_grid,
+                  trControl = ctrl1)
+
+ggplot(mars.fit)
+
+mars.fit$bestTune
+
+coef(mars.fit$finalModel) 
+
+# partial dependence plot
+#p1 <- pdp::partial(mars.fit, pred.var = c("recovery_time"), grid.resolution = 10) %>% autoplot()
+#p1
+```
+
+# GAM
+
+```{r gam}
+ctrl1 <- trainControl(method = "cv", number = 10)
+
+set.seed(7890)
+gam.fit <- train(x_train, y_train,
+                 method = "gam",
+                 tuneGrid = data.frame(method = "GCV.Cp", select = c(TRUE,FALSE)),
+                 trControl = ctrl1)
+
+gam.fit$bestTune
+
+gam.fit$finalModel
+
+par(mfrow = c(2,2))
+plot(gam.fit$finalModel)
+
+gam.pred <- predict(gam.fit, newdata = x_test)
+sqrt(mean((y_test - gam.pred)^2))
+```
+
+## model comparison
+
+```{r model comparison}
+set.seed(7890)
+lm.fit = train(x_train, y_train,
+                method = "lm",
+               trControl = ctrl1)
+rs <- resamples(list(lasso = lasso.fit,
+                     enet = enet.caret.fit,
+                     pls = pls.fit,
+                     mars = mars.fit,
+                     ridge = ridge.fit,
+                     lm = lm.fit,
+                     pcr = pcr.fit,
+                     gam = gam.fit))
+summary(rs)
+bwplot(rs, metric = "RMSE")
+parallelplot(rs, metric = "RMSE")
+```
+
+# Final model test error
+
+```{r test error}
+#Prediction on test data
+mars_pred <- predict(mars.fit, newdata = x_test)
+# test error
+mars_test.error <- mean((mars_pred - y_test)^2)
+mars_test.error
+```
+
+# tunning parameter plots
+
+```{r tunning plots}
+p11 <- ggplot(ridge.fit, trans = "log") + ggtitle("Ridge Regression")
+p12 <- ggplot(lasso.fit, trans = "log") + ggtitle("Lasso Regression")
+p13 <- ggplot(pls.fit, highlight = TRUE) + ggtitle("PLS")
+p14 <- ggplot(mars.fit) + ggtitle("MARS")
+plot_grid2 <- p11 + p12 + p13 + p14 +
+  plot_layout(ncol = 2, nrow = 2)
+
+plot_grid2
+```
+

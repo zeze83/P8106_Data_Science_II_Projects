@@ -1,0 +1,255 @@
+---
+title: "8106hw4"
+author: "Ze Li"
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: 2
+---
+
+```{r library, echo = T, message = FALSE, results='hide', warning=FALSE}
+library(ISLR)
+library(caret)
+library(mgcv)
+library(tidymodels)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(ranger)
+library(gbm)
+library(pROC)
+```
+
+# Problem 1
+
+```{r data}
+college=read.csv("/Users/zeze/Library/Mobile Documents/com~apple~CloudDocs/2024/24S BIST P8106 DS II/hw4/College.csv")
+indexTrain <- createDataPartition(y = college$Outstate, p = 0.8, list = FALSE)
+train <- college[indexTrain, ][-1]
+test <- college[-indexTrain, ][-1]
+train <- na.omit(train) 
+test <- na.omit(test)
+head(train)
+
+# matrix of predictors 
+x_train <- model.matrix(Outstate ~ ., train)[, -1]
+head(x_train)
+# vector of response
+y_train <- train$Outstate
+# matrix of predictors 
+x_test <- model.matrix(Outstate ~ ., test)[, -1]
+# vector of response
+y_test <- test$Outstate
+```
+
+**(a) Build a regression tree on the training data to predict the response. Create a plot of the tree.**
+
+```{r rt}
+ctrl <- trainControl(method = "cv")
+set.seed(1)
+rpart.fit <- train(Outstate ~ . , train, 
+                   method = "rpart", 
+                   tuneGrid = data.frame(cp = exp(seq(-6,-2, length = 100))),
+                   trControl = ctrl)
+plot(rpart.fit, xTrans = log)
+rpart.plot(rpart.fit$finalModel)
+```
+
+**(b) Perform random forest on the training data. Report the variable importance and the test error.**
+
+## Random Forest
+
+```{r rf}
+ctrl <- trainControl(method = "cv")
+rf.grid <- expand.grid(mtry = 1:16, splitrule = "variance", min.node.size = 1:6) 
+set.seed(1)
+rf.fit <- train(Outstate ~ . , data = train, 
+                method = "ranger",
+                tuneGrid = rf.grid,
+                trControl = ctrl)
+ggplot(rf.fit, highlight = TRUE)
+```
+
+## Random Forest - Variable Importance
+
+```{r rf vi}
+set.seed(1)
+rf2.final.per <- ranger(Outstate ~ . , 
+                        data = train,
+                        mtry = rf.fit$bestTune[[1]], 
+                        splitrule = "variance",
+                        min.node.size = rf.fit$bestTune[[3]],
+                        importance = "permutation",
+                        scale.permutation.importance = TRUE) 
+
+barplot(sort(ranger::importance(rf2.final.per), decreasing = FALSE), 
+        las = 2, horiz = TRUE, cex.names = 0.7,
+        col = colorRampPalette(colors = c("cyan","blue"))(19))
+
+set.seed(1)
+rf2.final.imp <- ranger(Outstate ~ . , 
+                        data = train,
+                        mtry = rf.fit$bestTune[[1]], 
+                        splitrule = "variance",
+                        min.node.size = rf.fit$bestTune[[3]],
+                        importance = "impurity") 
+
+barplot(sort(ranger::importance(rf2.final.imp), decreasing = FALSE), 
+        las = 2, horiz = TRUE, cex.names = 0.7,
+        col = colorRampPalette(colors = c("cyan","blue"))(19))
+```
+
+## Random Forest - Test Error
+
+```{r rf error}
+pred.rf <- predict(rf.fit, newdata = test) 
+RMSE(pred.rf, y_test)
+```
+
+The two bar plots illustrate the variable importance derived from a random forest model, with the first plot representing permutation importance and the second reflecting impurity importance. In both metrics, 'Expend' stands out as the most influential predictor, indicating that the amount spent per student is a key factor in predicting the response variable 'Outstate'. Academic-related variables such as 'Room.Board', 'Terminal', 'PhD', and 'Top10perc' also rank highly across both importance measures, underscoring the relevance of financial and educational quality factors in the model's predictions.
+
+The test error is `r RMSE(pred.rf, y_test)`.
+
+**(c) Perform boosting on the training data. Report the variable importance and the test error.**
+
+## Boosting
+
+```{r boosting}
+# We first fit a gradient boosting model with Gaussian loss function
+set.seed(1)
+bst <- gbm(Outstate ~ . , 
+           data = train,
+           distribution = "gaussian",
+           n.trees = 5000, 
+           interaction.depth = 3,
+           shrinkage = 0.005,
+           cv.folds = 10, 
+           n.cores = 2)
+# We plot loss function as a result of number of trees added to the ensemble
+gbm.perf(bst, method = "cv")
+```
+
+## Boosting - Variable Importance
+
+```{r boost vi}
+set.seed(1)
+gbm.final.per <- ranger(Outstate ~ . , 
+                        data = train,
+                        mtry = bst$bestTune[[1]], 
+                        splitrule = "variance",
+                        min.node.size = bst$bestTune[[3]],
+                        importance = "permutation",
+                        scale.permutation.importance = TRUE) 
+
+barplot(sort(ranger::importance(gbm.final.per), decreasing = FALSE), 
+        las = 2, horiz = TRUE, cex.names = 0.7,
+        col = colorRampPalette(colors = c("cyan","blue"))(19))
+
+set.seed(1)
+gbm.final.imp <- ranger(Outstate ~ . , 
+                        data = train,
+                        mtry = bst$bestTune[[1]], 
+                        splitrule = "variance",
+                        min.node.size = bst$bestTune[[3]],
+                        importance = "impurity") 
+
+barplot(sort(ranger::importance(gbm.final.imp), decreasing = FALSE), 
+        las = 2, horiz = TRUE, cex.names = 0.7,
+        col = colorRampPalette(colors = c("cyan","blue"))(19))
+```
+
+## Boosting - Test Error
+
+```{r boost error}
+pred.gbm <- predict(bst, newdata = test) 
+RMSE(pred.gbm, y_test)
+```
+
+Among predictors, the most significantly one influences the model's ability to predict the 'Outstate' variable. In both measures, 'Expend' emerges as the most influential variable, suggesting that expenditure per student is a dominant predictor. This is followed by academic-related factors such as 'Terminal', 'PhD', and student performance metrics 'Top10perc' which also hold significant importance, reflecting the relevance of academic excellence and resources in predicting 'Outstate'. 
+
+The test error is `r RMSE(pred.gbm, y_test)`.
+
+# Problem 2
+
+```{r}
+auto = read.csv("/Users/zeze/Library/Mobile Documents/com~apple~CloudDocs/2024/24S BIST P8106 DS II/hw4/auto.csv")
+auto = auto |>
+  drop_na() |>
+  mutate(mpg_cat = as.factor(mpg_cat),
+         origin = as.factor(origin))
+head(auto)
+
+data_split <- initial_split(auto, prop = 0.7)
+train2 <- training(data_split) 
+test2 <- testing(data_split)
+#indexTrain2 <- createDataPartition(y = auto$mpg_cat, p = 0.7, list = FALSE)
+#train2 <- auto[indexTrain2, ]
+#test2 <- auto[-indexTrain2, ]
+head(train2)
+```
+
+**(a) Build a classification tree using the training data, with mpg cat as the response. Which tree size corresponds to the lowest cross-validation error? Is this the same as the tree size obtained using the 1 SE rule?**
+
+## Classification Tree
+
+```{r ct tree}
+set.seed(1)
+tree1 <- rpart(formula = mpg_cat ~ . , data = train2, 
+               control = rpart.control(cp=0))
+cpTable <- printcp(tree1)
+plotcp(tree1)
+minErr <- which.min(cpTable[,4])
+tree2 <- rpart::prune(tree1, cp = cpTable[minErr,1]) 
+rpart.plot(tree2)
+```
+
+## 1se
+
+```{r ct tree 1se}
+minErr <- which.min(cpTable[, "xerror"])
+minCVError <- cpTable[minErr, "xerror"]
+minErrSE <- cpTable[minErr, "xstd"]
+seIndex <- max(which(cpTable[, "xerror"] <= (minCVError + minErrSE)))
+tree3 <- rpart::prune(tree1, cp = cpTable[seIndex, "CP"]) 
+rpart.plot(tree3)
+```
+
+The tree size corresponds to the lowest cross-validation error is  different after applying 1se.
+
+**(b) Perform boosting on the training data and report the variable importance. Report the test data performance.**
+
+## Boosting
+
+```{r boost ct}
+ctrl=trainControl(method = "cv", 
+                  classProbs = TRUE,
+                  summaryFunction = twoClassSummary)
+set.seed(1)
+gbmA.grid <- expand.grid(n.trees = c(2000,3000,4000,5000),
+                         interaction.depth = 1:6,
+                         shrinkage = c(0.001, 0.002, 0.003), 
+                         n.minobsinnode = 1)
+set.seed(1)
+gbmA.fit <- train(mpg_cat ~ . , train2,
+                  tuneGrid = gbmA.grid,
+                  trControl = ctrl,
+                  method = "gbm",
+                  distribution = "adaboost",
+                  metric = "ROC",
+                  verbose = FALSE)
+ggplot(gbmA.fit, highlight = TRUE)
+gbmA.pred <- predict(gbmA.fit, newdata = test2, type = "prob")[,1]
+summary(gbmA.fit$finalModel, las = 2, cBars = 19, cex.names = 0.6)
+```
+
+From the plot, we can see that "Displacement" appears to be the most influential variable, followed by "weight." The variables "origin2" and "origin3" have no bar extending to the right, indicating they have zero or negligible importance in this context. The purpose of the model is not specified, but given the variables, it may be related to vehicles or engines.
+
+# Test Performance
+
+```{r ct test performance}
+gbmA.probs <- predict(gbmA.fit, newdata = test2, type = "prob") 
+roc(response = test2$mpg_cat, predictor = gbmA.probs[, "high"])
+```
+
+The AUC value is 0.99, which is very close to 1. This indicates an excellent performance of the model on the test data, with high accuracy in differentiating between the 'high' and 'low' categories of the 'mpg_cat' variable. The 'controls' are instances labeled as 'high' and 'cases' as 'low'. An AUC value above 0.9 is typically considered outstanding, suggesting that the model's predicted probabilities (gbmA.probs[, "high"]) are highly effective at ranking the test data instances with a high degree of separation between the two mpg categories.
+

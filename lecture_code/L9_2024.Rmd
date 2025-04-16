@@ -1,0 +1,309 @@
+---
+title: "Classification II"
+author: "Yifei Sun, Runze Cui"
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: 2
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '2'
+header-includes:
+- \usepackage{fancyhdr}
+- \usepackage{lipsum}
+- \pagestyle{fancy}
+- \fancyhead[R]{\thepage}
+- \fancypagestyle{plain}{\pagestyle{fancy}}
+editor_options: 
+  chunk_output_type: console
+--- 
+
+\newpage
+
+
+  
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r, echo = T, message = FALSE, results='hide', warning=FALSE}
+library(caret)
+library(tidymodels)
+library(discrim) 
+library(MASS)
+library(mlbench)
+library(pROC)
+library(klaR)
+library(plotmo)
+```
+
+# Diabetes data
+
+We use the Pima Indians Diabetes Database for illustration. The data contain 768 observations and 9 variables. The outcome is a binary variable `diabetes`. We start from some simple visualization of the data.
+
+```{r}
+data(PimaIndiansDiabetes2)
+dat <- na.omit(PimaIndiansDiabetes2)
+
+set.seed(1)
+data_split <- initial_split(dat, prop = 0.7)
+
+# Extract the training and test data
+training_data <- training(data_split)
+testing_data <- testing(data_split)
+
+# Exploratory analysis: LDA based on every combination of two variables
+partimat(diabetes ~ glucose + age + mass + pedigree, 
+         data = training_data, method = "lda")
+```
+
+## LDA
+
+We use the function `lda` in library `MASS` to conduct LDA.
+```{r}
+lda.fit <- lda(diabetes~., data = training_data)
+plot(lda.fit)
+
+lda.fit$scaling
+
+head(predict(lda.fit)$x)
+
+mean(predict(lda.fit)$x)
+
+dat_t <- training_data
+x_n_tr <- dat_t[dat_t$diabetes == "neg", 1:8]
+x_p_tr <- dat_t[dat_t$diabetes == "pos", 1:8]
+cov.neg <- cov(x_n_tr)
+cov.pos <- cov(x_p_tr)
+n.neg <- nrow(x_n_tr)
+n.pos <- nrow(x_p_tr)
+n <- n.neg + n.pos
+K <- 2
+W <- 1/(n - K) * (cov.neg * (n.neg - 1) + cov.pos * (n.pos - 1))
+t(lda.fit$scaling) %*% W %*% lda.fit$scaling
+```
+
+```{r}
+lda.pred <- predict(lda.fit, newdata = testing_data)
+head(lda.pred$posterior)
+```
+
+Using caret:
+
+```{r}
+ctrl <- trainControl(method = "repeatedcv", repeats = 5,
+                     summaryFunction = twoClassSummary,
+                     classProbs = TRUE)
+
+set.seed(11)
+model.lda <- train(x = training_data[, 1:8],
+                   y = training_data$diabetes,
+                   method = "lda",
+                   metric = "ROC",
+                   trControl = ctrl)
+
+lda.pred2 <- predict(model.lda, newdata = testing_data, type = "prob")
+head(lda.pred2)
+```
+
+Using tidymodels:
+
+```{r}
+set.seed(11)
+cv_folds <- vfold_cv(training_data, v = 10, repeats = 5)
+
+# Model specification for LDA
+lda_spec <- discrim_linear() %>%
+  set_engine("MASS") %>%
+  set_mode("classification")
+
+# Set up the workflow
+lda_workflow <- workflow() %>%
+  add_model(lda_spec) %>% 
+  add_formula(diabetes ~ .)
+
+# Fit the model
+lda_fit <- lda_workflow %>%
+  fit(data = training_data) 
+
+# Prediction using test data 
+lda_pred <- predict(lda_fit, new_data = testing_data, type = "prob")
+head(lda_pred)
+```
+
+## QDA
+
+```{r}
+qda.fit <- qda(diabetes~., data = training_data)
+
+qda.pred <- predict(qda.fit, newdata = testing_data)
+head(qda.pred$posterior)
+```
+
+Using caret:
+
+```{r}
+set.seed(11)
+model.qda <- train(x = training_data[, 1:8],
+                   y = training_data$diabetes,
+                   method = "qda",
+                   metric = "ROC",
+                   trControl = ctrl)
+
+qda.pred2 <- predict(model.qda, newdata = testing_data, type = "prob")
+head(qda.pred2)
+```
+
+Using tidymodels:
+
+```{r}
+# Model specification for QDA
+qda_spec <- discrim_quad() %>%
+  set_engine("MASS") %>%
+  set_mode("classification")
+
+# Set up the workflow
+qda_workflow <- workflow() %>%
+  add_model(qda_spec) %>%
+  add_formula(diabetes ~ .)
+
+# Fit the model
+qda_fit <- qda_workflow %>%
+  fit(data = training_data) 
+
+# Prediction using test data 
+qda_pred <- predict(qda_fit, new_data = testing_data, type = "prob")
+head(qda_pred)
+```
+
+
+
+## Naive Bayes (NB)
+
+There is one practical issue with the NB classifier when nonparametric estimators are used. When a new data point includes a feature value that never occurs for some response class, the posterior probability can become zero. To avoid this, we increase the count of the value with a zero occurrence to a small value, so that the overall probability doesn't become zero. In practice, a value of one or two is a common choice. 
+This correction is called "Laplace Correction," and is implemented via the parameter `fL`. The parameter `adjust` adjusts the bandwidths of the kernel density estimates, and a larger value means a more flexible estimate.
+
+```{r, warning=FALSE}
+nbGrid <- expand.grid(usekernel = c(FALSE, TRUE),
+                      fL = 1, 
+                      adjust = seq(.2, 3, by = .2))
+
+set.seed(11)
+model.nb <- train(x = training_data[, 1:8],
+                  y = training_data$diabetes,
+                  method = "nb",
+                  tuneGrid = nbGrid,
+                  metric = "ROC",
+                  trControl = ctrl)
+
+plot(model.nb)
+```
+
+Using tidymodels:
+
+```{r}
+# Model specification for Naive Bayes
+nb_spec <- naive_Bayes(smoothness = tune(), Laplace = tune()) %>%
+  set_engine("klaR") %>%
+  set_mode("classification")
+
+# nb_spec %>% extract_parameter_dials("Laplace")
+# nb_spec %>% extract_parameter_dials("smoothness")
+
+# Tuning grid
+nb_grid_set <- parameters(Laplace(range = c(1, 1)), smoothness(range = c(0.2, 3)))
+nb_grid <- grid_regular(nb_grid_set, levels = c(1, 15))
+
+# Set up the workflow
+nb_workflow <- workflow() %>%
+  add_model(nb_spec) %>%
+  add_formula(diabetes ~ .)
+
+nb_tune <- nb_workflow %>%
+  tune_grid(resamples = cv_folds,
+            grid = nb_grid)
+
+autoplot(nb_tune, metric = "roc_auc")
+nb_best <- select_best(nb_tune, metric = "roc_auc")
+
+# Update the model spec
+final_nb_spec <- nb_spec %>% 
+  update(Laplace = nb_best$Laplace,
+         smoothness = nb_best$smoothness)
+
+nb_fit <- fit(final_nb_spec, formula = diabetes ~ ., data = training_data)
+```
+
+## Model comparison
+
+To compare the CV performance across LDA, QDA and NB models in caret:
+
+```{r}
+res <- resamples(list(LDA = model.lda, QDA = model.qda, NB = model.nb))
+summary(res)
+```
+
+
+To compare the CV performance across LDA, QDA and NB models in tidymodels:
+
+```{r}
+model_compare <- workflow_set(preproc = list(diabetes ~ .),
+                              models = list(lda = lda_spec, 
+                                            qda = qda_spec,
+                                            nb = final_nb_spec)) %>% 
+  workflow_map(resamples = cv_folds) %>% 
+  collect_metrics() %>%
+  filter(.metric == "roc_auc") %>%
+  dplyr::select(wflow_id, mean) %>% 
+  print()
+```
+
+Test performance
+
+```{r}
+roc.lda <- roc(testing_data$diabetes, lda.pred2[,2])
+# roc.lda <- roc(testing_data$diabetes, lda_pred$.pred_pos)
+
+plot(roc.lda, legacy.axes = TRUE)
+```
+
+
+# Iris data (K = 3)
+
+The famous iris data!
+
+```{r}
+data(iris)
+dat2 <- iris
+
+featurePlot(x = dat2[, 1:4], 
+            y = dat2$Species,
+            scales = list(x=list(relation="free"), 
+                          y=list(relation="free")),
+            plot = "density", pch = "|", 
+            auto.key = list(columns = 3))
+
+lda.fit2 <- lda(Species~., data = dat2)
+plot(lda.fit2, col = as.numeric(dat2$Species), abbrev = TRUE)
+
+ctrl2 <- trainControl(method = "cv")
+
+set.seed(1)
+model.lda2 <- train(x = dat2[,1:4],
+                    y = dat2$Species,
+                    method = "lda",
+                    trControl = ctrl2)
+
+set.seed(1)
+model.qda2 <- train(x = dat2[,1:4],
+                    y = dat2$Species,
+                    method = "qda",
+                    trControl = ctrl2)
+
+
+
+res2 <- resamples(list(LDA = model.lda2, 
+                       QDA = model.qda2))
+summary(res2)
+```

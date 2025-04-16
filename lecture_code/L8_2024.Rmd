@@ -1,0 +1,355 @@
+---
+title: "Classification I"
+author: "Yifei Sun, Runze Cui"
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: 2
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '2'
+header-includes:
+- \usepackage{fancyhdr}
+- \usepackage{lipsum}
+- \pagestyle{fancy}
+- \fancyhead[R]{\thepage}
+- \fancypagestyle{plain}{\pagestyle{fancy}}
+editor_options: 
+  chunk_output_type: console
+--- 
+
+\newpage
+
+
+  
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r, echo = T, message = FALSE, results='hide', warning=FALSE}
+library(caret)
+library(glmnet)
+library(tidymodels)
+library(mlbench)
+library(pROC)
+library(pdp)
+library(vip)
+library(AppliedPredictiveModeling)
+```
+
+We use the Pima Indians Diabetes Database for illustration. The data contain 768 observations and 9 variables. The outcome is a binary variable `diabetes`. We start from some simple visualization of the data.
+
+```{r}
+data(PimaIndiansDiabetes2)
+dat <- na.omit(PimaIndiansDiabetes2)
+
+featurePlot(x = dat[, 1:8], 
+            y = dat$diabetes,
+            scales = list(x = list(relation = "free"), 
+                          y = list(relation = "free")),
+            plot = "box")
+```
+
+The data is divided into two parts (training and test). 
+```{r}
+set.seed(1)
+data_split <- initial_split(dat, prop = 0.75)
+
+# Extract the training and test data
+training_data <- training(data_split)
+testing_data <- testing(data_split)
+```
+
+# Logistic regression and its cousins
+
+## `glm`
+
+```{r}
+contrasts(dat$diabetes)
+
+glm.fit <- glm(diabetes ~ ., 
+               data = training_data,
+               family = binomial(link = "logit"))
+```
+
+We first consider the simple classifier with a cut-off of 0.5 and evaluate its performance on the test data.
+
+```{r}
+test.pred.prob <- predict(glm.fit, newdata = testing_data,
+                          type = "response")
+test.pred <- rep("neg", length(test.pred.prob))
+test.pred[test.pred.prob > 0.5] <- "pos"
+
+confusionMatrix(data = as.factor(test.pred),
+                reference = testing_data$diabetes,
+                positive = "pos")
+```
+
+We then plot the test ROC curve. You may also consider a smoothed ROC curve.
+
+```{r}
+roc.glm <- roc(testing_data$diabetes, test.pred.prob)
+plot(roc.glm, legacy.axes = TRUE, print.auc = TRUE)
+plot(smooth(roc.glm), col = 4, add = TRUE)
+```
+
+We can also fit a logistic regression using caret. This is to compare the cross-validation performance with other models, rather than tuning the model.
+
+```{r}
+# Using caret
+ctrl <- trainControl(method = "cv", number = 10,
+                     summaryFunction = twoClassSummary,
+                     classProbs = TRUE)
+set.seed(1)
+model.glm <- train(x = training_data[1:8],
+                   y = training_data$diabetes,
+                   method = "glm",
+                   metric = "ROC",
+                   trControl = ctrl)
+```
+
+## Penalized logistic regression
+
+Penalized logistic regression can be fitted using `glmnet`. We use the `train` function to select the optimal tuning parameters.
+
+```{r}
+glmnGrid <- expand.grid(.alpha = seq(0, 1, length = 21),
+                        .lambda = exp(seq(-8, -1, length = 50)))
+set.seed(1)
+model.glmn <- train(x = training_data[1:8],
+                    y = training_data$diabetes,
+                    method = "glmnet",
+                    tuneGrid = glmnGrid,
+                    metric = "ROC",
+                    trControl = ctrl)
+
+model.glmn$bestTune
+
+myCol <- rainbow(25)
+myPar <- list(superpose.symbol = list(col = myCol),
+              superpose.line = list(col = myCol))
+
+plot(model.glmn, par.settings = myPar, xTrans = function(x) log(x))
+```
+
+## GAM
+
+```{r}
+set.seed(1)
+model.gam <- train(x = training_data[1:8],
+                   y = training_data$diabetes,
+                   method = "gam",
+                   metric = "ROC",
+                   trControl = ctrl)
+
+
+model.gam$finalModel
+
+plot(model.gam$finalModel, select = 3)
+```
+
+
+## MARS
+
+```{r}
+set.seed(1)
+model.mars <- train(x = training_data[1:8],
+                    y = training_data$diabetes,
+                    method = "earth",
+                    tuneGrid = expand.grid(degree = 1:4, 
+                                           nprune = 2:20),
+                    metric = "ROC",
+                    trControl = ctrl)
+
+plot(model.mars)
+
+coef(model.mars$finalModel) 
+
+pdp::partial(model.mars, pred.var = c("age"), grid.resolution = 200) %>% autoplot()
+
+vip(model.mars$finalModel, type = "nsubsets")
+vip(model.mars$finalModel, type = "rss")
+# see vi_model.earth for details on different types of variable importance of MARS
+```
+
+
+```{r}
+res <- resamples(list(GLM = model.glm, 
+                      GLMNET = model.glmn, 
+                      GAM = model.gam,
+                      MARS = model.mars))
+summary(res)
+
+bwplot(res, metric = "ROC")
+```
+
+Now let's look at the test data performance.
+
+```{r, warning=FALSE}
+glm.pred <- predict(model.glm, newdata = testing_data, type = "prob")[,2]
+glmn.pred <- predict(model.glmn, newdata = testing_data, type = "prob")[,2]
+gam.pred <- predict(model.gam, newdata = testing_data, type = "prob")[,2]
+mars.pred <- predict(model.mars, newdata = testing_data, type = "prob")[,2]
+
+roc.glm <- roc(testing_data$diabetes, glm.pred)
+roc.glmn <- roc(testing_data$diabetes, glmn.pred)
+roc.gam <- roc(testing_data$diabetes, gam.pred)
+roc.mars <- roc(testing_data$diabetes, mars.pred)
+
+auc <- c(roc.glm$auc[1], roc.glmn$auc[1], 
+         roc.gam$auc[1], roc.mars$auc[1])
+
+modelNames <- c("glm","glmn","gam","mars")
+
+ggroc(list(roc.glm, roc.glmn, roc.gam, roc.mars), legacy.axes = TRUE) + 
+  scale_color_discrete(labels = paste0(modelNames, " (", round(auc,3),")"),
+                       name = "Models (AUC)") +
+  geom_abline(intercept = 0, slope = 1, color = "grey")
+
+## using plot.roc
+# plot(roc.glm, legacy.axes = TRUE)
+# plot(roc.glmn, col = 2, add = TRUE)
+# plot(roc.gam, col = 3, add = TRUE)
+# plot(roc.mars, col = 4, add = TRUE)
+# 
+# legend("bottomright", legend = paste0(modelNames, ": ", round(auc,3)),
+#        col = 1:4, lwd = 2)
+```
+
+
+# tidymodels
+
+```{r}
+set.seed(1)
+cv_folds <- vfold_cv(training_data, v = 10)
+
+
+# # Model specification for Penalized Logistic Regression
+# glmnet_spec <- logistic_reg(penalty = tune(), mixture = tune()) %>%
+#   set_engine("glmnet") %>%
+#   set_mode("classification")
+# 
+# # Define the workflow 
+# glmnet_grid_set <- parameters(penalty(range = c(-8, -1), trans = log_trans()),
+#                               mixture(range = c(0, 1)))
+# glmnet_grid <- grid_regular(glmnet_grid_set, levels = c(50, 21))
+# 
+# # Set up the workflow
+# glmnet_workflow <- workflow() %>%
+#   add_model(glmnet_spec) %>%
+#   add_formula(diabetes ~ .)
+# 
+# # Tune the model
+# glmnet_tune <- tune_grid(
+#   glmnet_workflow,
+#   resamples = cv_folds,
+#   grid = glmnet_grid
+# )
+# 
+# # CV plot
+# autoplot(glmnet_tune, metric = "roc_auc")
+# 
+# glmnet_tune %>% show_best(metric = "roc_auc")
+# 
+# glmnet_best <- select_best(glmnet_tune, metric = "roc_auc")
+# 
+# final_glmnet_spec <- glmnet_spec %>% 
+#   update(penalty = glmnet_best$penalty,
+#          mixture = glmnet_best$mixture)
+# 
+# glmnet_fit <- fit(final_glmnet_spec, formula = diabetes ~ ., data = training_data)
+# 
+# glmnet_model <- extract_fit_engine(glmnet_fit)
+```
+
+
+```{r}
+# Model specification for GAM
+gam_spec <- gen_additive_mod(select_features = tune()) %>% 
+  set_engine("mgcv") %>%
+  set_mode("classification")
+
+# Set up the workflow
+gam_workflow <- 
+  workflow() %>% 
+  add_model(gam_spec, 
+            formula = diabetes ~ s(pregnant) + s(glucose) + s(pressure) + s(triceps) + 
+                             s(insulin) + s(mass) + s(pedigree) + s(age)) %>% 
+  add_formula(diabetes ~ .)
+
+gam_res <- 
+  gam_workflow %>% tune_grid(resamples = cv_folds)
+
+show_best(gam_res, metric = "roc_auc")
+
+# Update the model specification  
+final_gam_spec <- gam_spec %>% 
+  update(select_features = TRUE)
+
+gam_fit <- fit(final_gam_spec, 
+               formula = diabetes ~ s(pregnant) + s(glucose) + s(pressure) + s(triceps) + 
+                             s(insulin) + s(mass) + s(pedigree) + s(age), 
+               data = training_data)
+
+gam_model <- extract_fit_engine(gam_fit)
+gam_model
+
+plot(gam_fit$fit, select = 8)
+```
+
+```{r warning=F}
+# Model specification for MARS
+mars_spec <- mars(num_terms = tune(), 
+                  prod_degree = tune()) %>% 
+  set_engine("earth") %>%
+  set_mode("classification")
+
+# Grid of tuning parameters
+mars_grid_set <- parameters(num_terms(range = c(2, 20)),
+                            prod_degree(range = c(1, 4)))
+mars_grid <- grid_regular(mars_grid_set, levels = c(19, 4))
+
+# Set up the workflow
+mars_workflow <- workflow() %>%
+  add_model(mars_spec) %>%
+  add_formula(diabetes ~ .)
+
+# Model tuning
+mars_tune <- tune_grid(
+  mars_workflow,
+  resamples = cv_folds,
+  grid = mars_grid
+)
+
+
+autoplot(mars_tune, metric = "roc_auc") 
+
+mars_tune %>% show_best()
+
+mars_best <- select_best(mars_tune, metric = "roc_auc")
+
+final_mars_spec <- mars_spec %>% 
+  update(num_terms = mars_best$num_terms,
+         prod_degree = mars_best$prod_degree)
+
+mars_fit <- fit(final_mars_spec, formula = diabetes ~ ., data = training_data)
+
+mars_model <- extract_fit_engine(mars_fit)
+coef(mars_model)
+```
+
+Test data performance
+
+```{r warning=F}
+predict_mars <- predict(mars_fit, new_data = testing_data, type = "prob")
+
+eval_data <- data.frame(truth = testing_data$diabetes, mars_prob = predict_mars$.pred_pos)
+
+roc_auc(data = eval_data, truth = truth, mars_prob, event_level = "second")$.estimate 
+```
+
+
+
+
+

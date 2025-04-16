@@ -1,0 +1,159 @@
+---
+title: "8106hw5-1"
+author: "Ze Li"
+output: pdf_document
+---
+
+```{r library, echo = T, message = FALSE, results='hide', warning=FALSE}
+library(ISLR)
+library(caret)
+library(glmnet)
+library(tidymodels)
+library(mlbench)
+library(pROC)
+library(pdp)
+library(vip)
+library(AppliedPredictiveModeling)
+library(MASS)
+library(ggplot2)
+```
+
+## Problem 1
+
+```{r data import}
+auto = read.csv("/Users/zeze/Library/Mobile Documents/com~apple~CloudDocs/2024/24S BIST P8106 DS II/hw5/auto.csv")
+head(auto)
+data_split <- initial_split(auto, prop = 0.7)
+train <- training(data_split) 
+test <- testing(data_split)
+x_test <- model.matrix(mpg_cat ~ ., test)[, -1]
+head(train)
+```
+
+### (a) Fit a support vector classifier to the training data. What are the training and test error rates?
+
+```{r svc fit}
+ctrl <- trainControl(method = "cv")
+# kernlab
+set.seed(1)
+svml.fit <- train(mpg_cat ~ . , data = train,
+                  method = "svmLinear",
+                  tuneGrid = data.frame(C = exp(seq(-5, 2, len = 50))),
+                  trControl = ctrl)
+plot(svml.fit, highlight = TRUE, xTrans = log)
+# e1071
+set.seed(1)
+svml.fit2 <- train(mpg_cat ~ . , data = train,
+                   method = "svmLinear2",
+                   tuneGrid = data.frame(cost = exp(seq(-5, 2, len = 50))),
+                   trControl = ctrl)
+plot(svml.fit2, highlight = TRUE, xTrans = log)
+```
+
+```{r svc error rate}
+resamp <- resamples(list(svml = svml.fit, svml2 = svml.fit2))
+summary(resamp)
+pred.svml <- predict(svml.fit, newdata = test)
+# Ensure both are factors and have the same levels in the same order
+train$mpg_cat <- factor(train$mpg_cat, levels = c("high", "low"))
+test$mpg_cat <- factor(test$mpg_cat, levels = c("high", "low"))
+pred.svml <- factor(pred.svml, levels = c("high", "low"))
+# train error rate
+confusionMatrix(data = pred.svml, reference = train$mpg_cat)
+# test error rate
+confusionMatrix(data = pred.svml, reference = test$mpg_cat)
+```
+
+The accurarcy is 90.68%, so the error rate is 9.32%.
+
+The best linear fit visualization is 
+
+```{r}
+plot(best.linear, data = train,
+     weight ~ horsepower,
+     slice = list(displacement = 8, cylinders = 8,
+                  acceleration = 18, year = 72,
+                  origin = 2),
+     grid = 50)
+```
+
+### (b) Fit a support vector machine with a radial kernel to the training data. What are the training and test error rates?
+
+```{r svm fit}
+svmr.grid <- expand.grid(C = exp(seq(1, 7, len = 50)),
+                         sigma = exp(seq(-10, -2, len = 20)))
+# tunes over both cost and sigma
+set.seed(1)
+svmr.fit <- train(mpg_cat ~ . , data = train,
+                  method = "svmRadialSigma",
+                  tuneGrid = svmr.grid,
+                  trControl = ctrl)
+myCol <- rainbow(25)
+myPar <- list(superpose.symbol = list(col = myCol),
+              superpose.line = list(col = myCol))
+plot(svmr.fit, highlight = TRUE, par.settings = myPar)
+```
+
+```{r svm fit2}
+# tune over cost and uses a single value of sigma based on kernlab's sigest function
+set.seed(1)
+svmr.fit2 <- train(mpg_cat ~ . , data = train,
+                   method = "svmRadialCost",
+                   tuneGrid = data.frame(C = exp(seq(-3, 3, len = 20))),
+                   trControl = ctrl)
+# Platt’s probabilistic outputs; use with caution
+set.seed(1)
+svmr.fit3 <- train(mpg_cat ~ . , data = train,
+                   method = "svmRadialCost",
+                   tuneGrid = data.frame(C = exp(seq(-3, 3, len = 20))),
+                   trControl = ctrl,
+                   prob.model = TRUE)
+predict(svmr.fit3, newdata = x_test, type = "prob")
+resamp2 <- resamples(list(svmr = svmr.fit, svmr2 = svmr.fit2))
+summary(resamp2)
+```
+
+```{r svm error rate}
+pred.svmr <- predict(svmr.fit, newdata = test)
+pred.svmr <- factor(pred.svmr, levels = c("high", "low"))
+# train error rate
+confusionMatrix(data = pred.svmr, reference = train$mpg_cat)
+# test error rate
+confusionMatrix(data = pred.svmr, reference = test$mpg_cat)
+```
+
+The accurarcy is 91.53%, so the error rate is 8.48%.
+
+The best radial visualization is
+
+```{r}
+plot(best.radial, train,
+     displacement ~ weight,
+     slice = list(cylinders = 8, horsepower = 100,
+                  acceleration = 18, year = 72,
+                  origin = 2),
+     grid = 100,
+     symbolPalette = c("cyan","darkblue"),
+     color.palette = heat.colors)
+```
+
+
+## Problem 2
+
+```{r data2}
+data("USArrests")
+USArrests = USArrests %>%
+  as_tibble()
+head(USArrests)
+```
+
+### (a) Using hierarchical clustering with complete linkage and Euclidean distance, cluster the states. Cut the dendrogram at a height that results in three distinct clusters. Which states belong to which clusters?
+
+```{r}
+
+```
+
+
+### (b) Hierarchically cluster the states using complete linkage and Euclidean distance, after scaling the variables to have standard deviation one.
+
+### (c) Does scaling the variables change the clustering results? Why? In your opinion, should the variables be scaled before the inter-observation dissimilarities are computed?

@@ -1,0 +1,421 @@
+---
+title: "Ridge Regression"
+author: "Yifei Sun, Runze Cui"
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: 2
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '2'
+header-includes:
+- \usepackage{fancyhdr}
+- \usepackage{lipsum}
+- \pagestyle{fancy}
+- \fancyhead[R]{\thepage}
+- \fancypagestyle{plain}{\pagestyle{fancy}}
+editor_options: 
+  chunk_output_type: console
+--- 
+
+\newpage
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo = T, message = FALSE, results='hide', warning=FALSE}
+library(ISLR)
+library(glmnet)
+library(caret)
+library(tidymodels)
+library(corrplot)
+library(ggplot2)
+library(plotmo)
+library(ggrepel)
+```
+
+Predict a baseball player’s salary on the basis of various statistics associated with performance in the previous year. Use `?Hitters` for more details.
+
+```{r}
+data(Hitters)
+Hitters <- na.omit(Hitters)
+
+set.seed(2222)
+data_split <- initial_split(Hitters, prop = 0.8)
+
+# Extract the training and test data
+training_data <- training(data_split)
+testing_data <- testing(data_split)
+```
+
+# Using `glmnet`
+
+## Ridge regression
+
+```{r}
+# matrix of predictors (glmnet uses input matrix)
+x <- model.matrix(Salary ~ ., training_data)[,-1]
+# vector of response
+y <- training_data[, "Salary"]
+
+corrplot(cor(x), method = "circle", type = "full")
+```
+
+`alpha` is the elastic net mixing parameter. `alpha=1` is the lasso penalty, and `alpha=0` the ridge penalty. `glmnet()` function standardizes the independent variables by default (The coefficients are always returned on the original scale). 
+
+```{r}
+# fit the ridge regression (alpha = 0) with a sequence of lambdas
+ridge.mod <- glmnet(x = x, y = y, 
+                    # standardize = TRUE,
+                    alpha = 0, 
+                    lambda = exp(seq(10, -5, length = 100)))
+```
+
+`coef(ridge.mod)` gives the coefficient matrix. Each column is the fit corresponding to one lambda value.
+
+```{r}
+mat.coef <- coef(ridge.mod)
+dim(mat.coef)
+```
+
+
+### Trace plot
+
+```{r}
+# plot(ridge.mod, xvar = "lambda", label = TRUE)
+plot_glmnet(ridge.mod, xvar = "rlambda", label = 19)
+```
+
+### Cross-validation
+
+We use cross-validation to determine the optimal value of `lambda`. The two vertical lines are the for minimal MSE and 1SE rule. The 1SE rule gives the most regularized model such that error is within one standard error of the minimum.
+
+```{r}
+## ridge alpha = 0
+set.seed(2)
+cv.ridge <- cv.glmnet(x, y, 
+                      alpha = 0, 
+                      lambda = exp(seq(10, -5, length = 100)))
+# set.seed(2)
+# cv.ridge <- cv.glmnet(x, y, alpha = 0, nlambda = 200)
+
+plot(cv.ridge)
+abline(h = (cv.ridge$cvm + cv.ridge$cvsd)[which.min(cv.ridge$cvm)], col = 4, lwd = 2)
+## up number = nonzero parameter number
+
+# min CV MSE
+cv.ridge$lambda.min
+# the 1SE rule
+cv.ridge$lambda.1se
+```
+
+
+### Coefficients of the final model
+
+Get the coefficients of the optimal model. `s` is value of the penalty parameter `lambda` at which predictions are required.
+
+```{r}
+# extract coefficients
+predict(cv.ridge, s = cv.ridge$lambda.min, type = "coefficients") 
+
+# make prediction
+head(predict(cv.ridge, newx = model.matrix(Salary ~ ., testing_data)[,-1], 
+             s = "lambda.min", type = "response")) 
+
+# predict(cv.ridge, s = "lambda.min", type = "coefficients") 
+# predict(cv.ridge, s = "lambda.1se", type = "coefficients") 
+# predict(ridge.mod, s = cv.ridge$lambda.min, type = "coefficients")
+```
+
+## Lasso 
+
+The syntax is along the same line as ridge regression. Now we use `alpha = 1`.
+
+```{r}
+## lasso alpha = 1
+cv.lasso <- cv.glmnet(x, y, 
+                      alpha = 1, 
+                      lambda = exp(seq(6, -5, length = 100)))
+
+cv.lasso$lambda.min
+```
+
+```{r}
+plot(cv.lasso)
+## u should avoid the case where the lambda that gives you the smallest cross validation error is on the boundary of your grid.
+## So if that is the case, it means that you should expand the grid,
+```
+
+```{r}
+# cv.lasso$glmnet.fit is a fitted glmnet object using the full training data
+# plot(cv.lasso$glmnet.fit, xvar = "lambda", label=TRUE)
+plot_glmnet(cv.lasso$glmnet.fit)
+```
+
+
+```{r}
+predict(cv.lasso, s = "lambda.min", type = "coefficients")
+
+head(predict(cv.lasso, newx = model.matrix(Salary ~ ., testing_data)[,-1], 
+             s = "lambda.min", type = "response"))
+```
+
+
+# Using `caret`
+
+## Ridge regression
+
+```{r}
+ctrl1 <- trainControl(method = "cv", number = 10)
+
+set.seed(2)
+ridge.fit <- train(Salary ~ . ,
+                   data = training_data,
+                   method = "glmnet",
+                   tuneGrid = expand.grid(alpha = 0,
+                                          lambda = exp(seq(6, 0, length=100))),
+                   ## expand dot grid function is used to create a data frame that contains all the combination of tune parameters that you that you specify
+                   trControl = ctrl1)
+
+plot(ridge.fit, xTrans = log)
+
+
+ridge.fit$bestTune
+
+# coefficients in the final model
+coef(ridge.fit$finalModel, s = ridge.fit$bestTune$lambda)
+```
+
+## Lasso
+
+```{r}
+set.seed(2)
+lasso.fit <- train(Salary ~ .,
+                   data = training_data,
+                   method = "glmnet",
+                   tuneGrid = expand.grid(alpha = 1, 
+                                          lambda = exp(seq(6, 0, length = 100))),
+                   trControl = ctrl1)
+plot(lasso.fit, xTrans = log)
+
+lasso.fit$bestTune
+
+# coefficients in the final model
+coef(lasso.fit$finalModel, lasso.fit$bestTune$lambda)
+```
+
+## Elastic net
+
+```{r}
+set.seed(2)
+enet.fit <- train(Salary ~ .,
+                  data = training_data,
+                  method = "glmnet",
+                  tuneGrid = expand.grid(alpha = seq(0, 1, length = 21), 
+                                         lambda = exp(seq(6, 0, length = 100))),
+                  trControl = ctrl1)
+enet.fit$bestTune
+
+myCol <- rainbow(25)
+myPar <- list(superpose.symbol = list(col = myCol),
+              superpose.line = list(col = myCol))
+
+plot(enet.fit, par.settings = myPar)
+
+# coefficients in the final model
+coef(enet.fit$finalModel, enet.fit$bestTune$lambda)
+```
+
+## Comparing different models
+
+```{r, fig.width=5}
+set.seed(2)
+lm.fit <- train(Salary ~ .,
+                data = training_data,
+                method = "lm",
+                trControl = ctrl1)
+
+resamp <- resamples(list(enet = enet.fit, lasso = lasso.fit, ridge = ridge.fit, lm = lm.fit))
+
+summary(resamp)
+
+parallelplot(resamp, metric = "RMSE")
+# bwplot(resamp, metric = "RMSE")
+```
+
+## Prediction
+
+```{r}
+enet.pred <- predict(enet.fit, newdata = testing_data)
+# test error
+mean((enet.pred - testing_data[, "Salary"])^2)
+```
+
+
+# Using `tidymodels`
+
+## Ridge regression
+
+```{r}
+set.seed(2)
+cv_folds <- vfold_cv(training_data, v = 10) 
+
+# Model specification for ridge regression
+ridge_spec <- linear_reg(penalty = tune(), mixture = 0) %>% # mixture = 0 for ridge regression
+  set_engine("glmnet") %>% 
+  set_mode("regression")
+
+# ridge_spec %>% extract_parameter_dials("penalty")
+
+# Grid of tuning Parameters
+ridge_grid_set <- parameters(penalty(range = c(-2, 5), trans = log_trans()))
+ridge_grid <- grid_regular(ridge_grid_set, levels = 100)
+
+# Set up the workflow
+ridge_workflow <- workflow() %>%
+  add_model(ridge_spec) %>%
+  add_formula(Salary ~ .)
+
+# Tune the model
+ridge_tune <- tune_grid(
+  ridge_workflow,
+  resamples = cv_folds,
+  grid = ridge_grid,
+  control = control_resamples(extract = extract_fit_parsnip, save_pred = TRUE)
+)
+
+# CV plot
+autoplot(ridge_tune, metric = "rmse") 
+
+# Select tuning parameters based on 1SE rule
+ridge_1SE <- select_by_one_std_err(ridge_tune, metric = "rmse", desc(penalty)) 
+
+# !!! see "why_is_ridge_CV_curve_flat.R"
+ridge_best <- select_best(ridge_tune, metric = "rmse") 
+cv_rmse <- ridge_tune %>% collect_metrics() %>% filter(.metric == "rmse") 
+cv_rmse_mean <- cv_rmse$mean
+which(cv_rmse_mean == min(cv_rmse_mean))
+
+# Update the model with the best lambda
+final_ridge_spec <- ridge_spec %>% 
+  update(penalty = 1.3)
+
+# Fit your final model to the train data
+ridge_fit <- fit(final_ridge_spec, formula = Salary ~ ., data = training_data)
+
+# Get coefficients
+ridge_model <- extract_fit_engine(ridge_fit)
+coef(ridge_model, s = ridge_1SE$penalty)
+```
+
+
+## Lasso
+
+```{r}
+lasso_spec <- linear_reg(penalty = tune(), mixture = 1) %>% # mixture = 1 for lasso regression
+  set_engine("glmnet") %>% 
+  set_mode("regression")
+
+# lasso_spec %>% extract_parameter_dials("penalty")
+
+lasso_grid_set <- parameters(penalty(range = c(-3, 5), trans = log_trans()))
+lasso_grid <- grid_regular(lasso_grid_set, levels = 100)
+
+lasso_workflow <- workflow() %>%
+  add_model(lasso_spec) %>%
+  add_formula(Salary ~ .)
+
+lasso_tune <- tune_grid(
+  lasso_workflow,
+  resamples = cv_folds,
+  grid = lasso_grid
+)
+
+autoplot(lasso_tune, metric = "rmse")
+
+lasso_best <- select_best(lasso_tune, metric = "rmse") 
+
+final_lasso_spec <- lasso_spec %>% 
+  update(penalty = lasso_best$penalty)
+
+lasso_fit <- fit(final_lasso_spec, formula = Salary ~ ., data = training_data)
+
+lasso_model <- extract_fit_engine(lasso_fit)
+coef(lasso_model, s = lasso_best$penalty)
+```
+
+## Elastic net
+
+```{r}
+enet_spec <- linear_reg(penalty = tune(), mixture = tune()) %>% 
+  set_engine("glmnet") %>% 
+  set_mode("regression")
+
+# enet_spec %>% extract_parameter_dials("mixture")
+# enet_spec %>% extract_parameter_dials("mixture")
+
+enet_grid_set <- parameters(penalty(range = c(-3, 5), trans = log_trans()),
+                            mixture(range = c(0, 1)))
+enet_grid <- grid_regular(enet_grid_set, levels = c(100, 21))
+
+
+
+enet_workflow <- workflow() %>%
+  add_model(enet_spec) %>%
+  add_formula(Salary ~ .)
+
+enet_tune <- tune_grid(
+  enet_workflow,
+  resamples = cv_folds,
+  grid = enet_grid
+)
+
+autoplot(enet_tune, metric = "rmse") + 
+  theme(legend.position = "top") +
+  labs(color = "Mixing Percentage\n(Alpha Values)") 
+
+enet_best <- select_best(enet_tune, metric = "rmse") 
+
+final_enet_spec <- enet_spec %>% 
+  update(penalty = enet_best$penalty, mixture = enet_best$mixture)
+
+enet_fit <- fit(final_enet_spec, formula = Salary ~ ., data = training_data)
+
+# Get coefficients
+enet_model <- extract_fit_engine(enet_fit)
+coef(enet_model, s = enet_best$penalty)
+```
+
+## Comparing different models
+
+```{r}
+lm_spec <- linear_reg() %>% 
+  set_engine("lm") %>% 
+  set_mode("regression")
+
+model_compare <- workflow_set(preproc = list(Salary ~ .),
+                              models = list(lm = lm_spec, 
+                                            lasso = final_lasso_spec,
+                                            ridge = final_ridge_spec,
+                                            enet = final_enet_spec)) %>% 
+  workflow_map(resamples = cv_folds) 
+
+autoplot(model_compare, metric = "rmse") +
+  geom_text_repel(aes(label = wflow_id, color = wflow_id), 
+                  nudge_x = 1/8, nudge_y = 1/100) +
+  theme(legend.position = "none")
+```
+
+## Prediction
+
+```{r}
+enet_pred <- predict(enet_fit, new_data = testing_data)
+
+# Calculate test RMSE
+sqrt(mean((enet_pred[[1]] - testing_data$Salary)^2))
+```
+
+

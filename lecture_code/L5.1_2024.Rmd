@@ -1,0 +1,237 @@
+---
+title: "Ridge Regression"
+author: "Yifei Sun, Runze Cui"
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: 2
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '2'
+header-includes:
+- \usepackage{fancyhdr}
+- \usepackage{lipsum}
+- \pagestyle{fancy}
+- \fancyhead[R]{\thepage}
+- \fancypagestyle{plain}{\pagestyle{fancy}}
+editor_options: 
+  chunk_output_type: console
+--- 
+
+\newpage
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo = T, message = FALSE, results='hide', warning=FALSE}
+library(ISLR)
+library(glmnet)
+library(caret)
+library(tidymodels)
+library(corrplot)
+library(ggplot2)
+library(plotmo)
+```
+
+Predict a baseball player’s salary on the basis of various statistics associated with performance in the previous year. Use `?Hitters` for more details.
+
+```{r}
+data(Hitters)
+Hitters <- na.omit(Hitters)
+
+set.seed(2222)
+data_split <- initial_split(Hitters, prop = 0.8)
+
+# Extract the training and test data
+training_data <- training(data_split)
+testing_data <- testing(data_split)
+```
+
+# Using `glmnet`
+
+## Ridge regression
+
+```{r}
+# matrix of predictors (glmnet uses input matrix)
+x <- model.matrix(Salary ~ ., training_data)[,-1]
+# vector of response
+y <- training_data[, "Salary"]
+
+corrplot(cor(x), method = "circle", type = "full")
+```
+
+`alpha` is the elastic net mixing parameter. `alpha=1` is the lasso penalty, and `alpha=0` the ridge penalty. `glmnet()` function standardizes the independent variables by default (The coefficients are always returned on the original scale). 
+
+```{r}
+# fit the ridge regression (alpha = 0) with a sequence of lambdas
+ridge.mod <- glmnet(x = x, y = y, 
+                    # standardize = TRUE,
+                    alpha = 0, 
+                    lambda = exp(seq(10, -5, length = 100)))
+```
+
+`coef(ridge.mod)` gives the coefficient matrix. Each column is the fit corresponding to one lambda value.
+
+```{r}
+mat.coef <- coef(ridge.mod)
+dim(mat.coef)
+```
+
+
+### Trace plot
+
+```{r}
+# plot(ridge.mod, xvar = "lambda", label = TRUE)
+plot_glmnet(ridge.mod, xvar = "rlambda", label = 19)
+```
+
+### Cross-validation
+
+We use cross-validation to determine the optimal value of `lambda`. The two vertical lines are the for minimal MSE and 1SE rule. The 1SE rule gives the most regularized model such that error is within one standard error of the minimum.
+
+```{r}
+set.seed(2)
+cv.ridge <- cv.glmnet(x, y, 
+                      alpha = 0, 
+                      lambda = exp(seq(10, -5, length = 100)))
+# set.seed(2)
+# cv.ridge <- cv.glmnet(x, y, alpha = 0, nlambda = 200)
+
+plot(cv.ridge)
+abline(h = (cv.ridge$cvm + cv.ridge$cvsd)[which.min(cv.ridge$cvm)], col = 4, lwd = 2)
+
+# min CV MSE
+cv.ridge$lambda.min
+# the 1SE rule
+cv.ridge$lambda.1se
+```
+
+
+### Coefficients of the final model
+
+Get the coefficients of the optimal model. `s` is value of the penalty parameter `lambda` at which predictions are required.
+
+```{r}
+# extract coefficients
+predict(cv.ridge, s = cv.ridge$lambda.min, type = "coefficients") 
+
+# make prediction
+head(predict(cv.ridge, newx = model.matrix(Salary ~ ., testing_data)[,-1], 
+             s = "lambda.min", type = "response")) 
+
+# predict(cv.ridge, s = "lambda.min", type = "coefficients") 
+# predict(cv.ridge, s = "lambda.1se", type = "coefficients") 
+# predict(ridge.mod, s = cv.ridge$lambda.min, type = "coefficients")
+```
+
+
+# Using `caret`
+
+## Ridge regression
+
+```{r}
+ctrl1 <- trainControl(method = "cv", number = 10)
+
+
+# set.seed(2)
+# ridge.fit <- train(x, y,
+#                    method = "glmnet",
+#                    tuneGrid = expand.grid(alpha = 0, 
+#                                           lambda = exp(seq(10, -5, length=100))),
+#                    trControl = ctrl1)
+
+
+set.seed(2)
+ridge.fit <- train(Salary ~ . ,
+                   data = training_data,
+                   method = "glmnet",
+                   tuneGrid = expand.grid(alpha = 0,
+                                          lambda = exp(seq(10, -5, length=100))),
+                   trControl = ctrl1)
+
+plot(ridge.fit, xTrans = log)
+
+
+ridge.fit$bestTune
+
+# coefficients in the final model
+coef(ridge.fit$finalModel, s = ridge.fit$bestTune$lambda)
+```
+
+
+```{r}
+# ridge.pred <- predict(ridge.fit, newdata = model.matrix(Salary ~ ., testing_data)[,-1])
+ridge.pred <- predict(ridge.fit, newdata = testing_data)
+
+# test error
+mean((ridge.pred - testing_data[, "Salary"])^2)
+```
+
+# Using `tidymodels`
+
+## Ridge regression
+
+```{r}
+# Setup the resampling method
+set.seed(2)
+cv_folds <- vfold_cv(training_data, v = 10) 
+
+# Model specification for ridge regression
+ridge_spec <- linear_reg(penalty = tune(), mixture = 0) %>% # mixture = 0 for ridge regression
+  set_engine("glmnet") %>% 
+  set_mode("regression")
+
+# ridge_spec %>% extract_parameter_dials("penalty")
+
+# Grid of tuning Parameters
+ridge_grid_set <- parameters(penalty(range = c(-5, 10), trans = log_trans()))
+ridge_grid <- grid_regular(ridge_grid_set, levels = 100)
+
+# Set up the workflow
+ridge_workflow <- workflow() %>%
+  add_model(ridge_spec) %>%
+  add_formula(Salary ~ .)
+
+# Tune the model
+ridge_tune <- tune_grid(
+  ridge_workflow,
+  resamples = cv_folds,
+  grid = ridge_grid
+)
+
+# CV plot
+autoplot(ridge_tune, metric = "rmse") 
+
+# Select tuning parameters based on 1SE rule
+ridge_1SE <- select_by_one_std_err(ridge_tune, metric = "rmse", desc(penalty)) 
+
+# !!!
+ridge_best <- select_best(ridge_tune, metric = "rmse") 
+cv_rmse <- ridge_tune %>% collect_metrics() %>% filter(.metric == "rmse") 
+cv_rmse_mean <- cv_rmse$mean
+which(cv_rmse_mean == min(cv_rmse_mean))
+
+# Update the model with the best lambda
+final_ridge_spec <- ridge_spec %>% 
+  update(penalty = ridge_1SE$penalty)
+
+# Fit your final model to the train data
+ridge_fit <- fit(final_ridge_spec, formula = Salary ~ ., data = training_data)
+
+# Get coefficients
+ridge_model <- extract_fit_engine(ridge_fit)
+coef(ridge_model, s = ridge_1SE$penalty)
+```
+
+
+```{r}
+# prediction
+ridge_pred <- predict(ridge_fit, new_data = testing_data)
+
+# test MSE
+test_error <- mean((testing_data$Salary - ridge_pred$.pred)^2)
+test_error
+```

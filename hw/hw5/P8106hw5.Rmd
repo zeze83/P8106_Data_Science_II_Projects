@@ -1,0 +1,151 @@
+---
+title: "8106hw5"
+author: "Ze Li"
+output: pdf_document
+---
+
+
+```{r library, echo = T, message = FALSE, results='hide', warning=FALSE}
+library(rsample)
+library(ISLR)
+library(tidyverse)
+library(caret)
+library(kernlab)
+library(e1071)
+library(ggplot2)
+library(RColorBrewer)
+library(factoextra)
+```
+
+## Problem 1
+
+```{r data import}
+auto = read.csv("/Users/zeze/Library/Mobile Documents/com~apple~CloudDocs/2024/24S BIST P8106 DS II/hw5/auto.csv")
+auto <- auto |>
+  mutate(mpg_cat=as.factor(mpg_cat))
+head(auto)
+data_split <- initial_split(auto, prop = 0.7)
+train <- training(data_split) 
+test <- testing(data_split)
+x_test <- model.matrix(mpg_cat ~ ., test)[, -1]
+head(train)
+```
+
+### (a) Fit a support vector classifier to the training data. What are the training and test error rates?
+
+```{r svc fit}
+set.seed(1)
+linear.tune <- tune.svm(mpg_cat ~ .,
+                        data = train,
+                        kernel = "linear",
+                        cost = exp(seq(-5, 0, len = 50)),
+                        scale = TRUE)
+plot(linear.tune)
+
+# show the best parameters
+linear.tune$best.parameters
+best.linear <- linear.tune$best.model
+# summary
+summary(best.linear)
+```
+
+```{r svc error rate}
+set.seed(1)
+# Training error rate
+confusionMatrix(data = best.linear$fitted, reference = train$mpg_cat)
+
+# Test error rate
+pred.linear <- predict(best.linear, newdata = test)
+confusionMatrix(data = pred.linear, reference = test$mpg_cat)
+```
+
+The support vector classifier's train accuracy is 0.9197 so error rate is `r 1-0.9197`%, and test accuracy is 0.9153 so error rate is `r 1-0.9153`%.
+
+### (b) Fit a support vector machine with a radial kernel to the training data. What are the training and test error rates?
+
+```{r svm fit} 
+set.seed(1)
+radial.tune <- tune.svm(mpg_cat ~ .,
+                        data = train,
+                        kernel = "radial",
+                        cost = exp(seq(-1,4,len = 20)),
+                        gamma = exp(seq(-6,-2,len = 20)))
+plot(radial.tune, transform.y = log, transform.x = log,
+     color.palette = terrain.colors)
+
+best.radial <- radial.tune$best.model
+summary(best.radial)
+```
+
+```{r svm error rate}
+# Training error rate
+confusionMatrix(data = best.radial$fitted, reference = train$mpg_cat)
+
+# Test error rate
+pred.radial <- predict(best.radial, newdata = test)
+confusionMatrix(data = pred.radial, reference = test$mpg_cat)
+```
+
+The support vector machine with a radial kernel's train accuracy is 0.9635 so error rate is `r 1-0.9635`% and test accuracy is 0.9068 error rate is `r 1-0.9068`%.
+
+## Problem 2
+
+```{r data2}
+data("USArrests")
+USArrests = USArrests %>%
+  as_tibble()
+head(USArrests)
+```
+
+### (a) Using hierarchical clustering with complete linkage and Euclidean distance, cluster the states. Cut the dendrogram at a height that results in three distinct clusters. Which states belong to which clusters?
+
+```{r}
+hc.complete <- hclust(dist(USArrests), method = "complete")
+fviz_dend(hc.complete, k = 3,
+          cex = 0.3,
+          palette = "jco",
+          color_labels_by_k = TRUE,
+          rect = TRUE, rect_fill = TRUE, rect_border = "jco",
+          labels_track_height = 2.5)
+
+ind3.complete <- cutree(hc.complete, 3)
+
+# The states in different clusters
+cl1 <- USArrests[ind3.complete == 1,]
+cl1
+cl2 <- USArrests[ind3.complete == 2,]
+cl2
+cl3 <- USArrests[ind3.complete == 3,]
+cl3
+```
+
+### (b) Hierarchically cluster the states using complete linkage and Euclidean distance, after scaling the variables to have standard deviation one.
+
+```{r}
+scale.usa <- scale(USArrests)
+
+hc.complete.scaled <- hclust(dist(scale.usa), method = "complete")
+fviz_dend(hc.complete.scaled, k = 3,
+          cex = 0.3,
+          palette = "jco",
+          color_labels_by_k = TRUE,
+          rect = TRUE, rect_fill = TRUE, rect_border = "jco",
+          labels_track_height = 2.5)
+
+ind3.complete.scaled <- cutree(hc.complete.scaled, 3)
+
+# The states in different clusters for standardized data
+scaled.cl1 <- USArrests[ind3.complete.scaled == 1,]
+scaled.cl1
+scaled.cl2 <- USArrests[ind3.complete.scaled == 2,]
+scaled.cl2
+scaled.cl3 <- USArrests[ind3.complete.scaled == 3,]
+scaled.cl3
+```
+
+### (c) Does scaling the variables change the clustering results? Why? In your opinion, should the variables be scaled before the inter-observation dissimilarities are computed?
+
+Based on the results, scaling the variables lead to significant changes in the clustering results. Since the algorithm will assign larger weight to the predictors with larger value, the states in the same cluster share more similarities than the first model. 
+
+Scaling variables before computing inter-observation dissimilarities in hierarchical clustering ensures that each variable contributes equally, prevents disproportionate influence from variables with larger scales, and maintains distance metric consistency. It enhances clustering performance by producing more reliable and interpretable clusters, free from biases due to variable scale discrepancies.
+

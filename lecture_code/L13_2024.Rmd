@@ -1,0 +1,303 @@
+---
+title: "Support Vector Machines"
+author: "Yifei Sun, Runze Cui"
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: 2
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '2'
+header-includes:
+- \usepackage{fancyhdr}
+- \usepackage{lipsum}
+- \pagestyle{fancy}
+- \fancyhead[R]{\thepage}
+- \fancypagestyle{plain}{\pagestyle{fancy}}
+editor_options: 
+  chunk_output_type: console
+--- 
+
+\newpage
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r, echo = T, message = FALSE, results='hide', warning=FALSE}
+library(mlbench)
+library(ISLR)
+library(caret)
+library(tidymodels)
+library(e1071)
+library(kernlab)
+library(ggrepel)
+```
+
+
+
+
+We use the Pima Indians Diabetes Database for illustration. The outcome is a binary variable `diabetes`. 
+
+```{r}
+data(PimaIndiansDiabetes2)
+dat <- na.omit(PimaIndiansDiabetes2)
+dat$diabetes <- factor(dat$diabetes, c("pos", "neg"))
+
+set.seed(111111)
+data_split <- initial_split(dat, prop = 0.75)
+
+training_data <- training(data_split)
+testing_data <- testing(data_split)
+```
+
+
+
+## Using `e1071`
+
+Check https://cran.r-project.org/web/packages/e1071/vignettes/svmdoc.pdf for more details.
+
+### Linear boundary
+
+Most real data sets will not be fully separable by a linear boundary. Support vector classifiers with a tuning parameter `cost`, which quantifies the penalty associated with having an observation on the wrong side of the classification boundary, can be used to build a linear boundary.
+
+```{r}
+set.seed(1)
+linear.tune <- tune.svm(diabetes ~ . , 
+                        data = training_data, 
+                        kernel = "linear", 
+                        cost = exp(seq(-5,2, len = 50)),
+                        scale = TRUE)
+plot(linear.tune)
+# summary(linear.tune)
+linear.tune$best.parameters
+
+best.linear <- linear.tune$best.model
+summary(best.linear)
+
+pred.linear <- predict(best.linear, newdata = testing_data)
+
+confusionMatrix(data = pred.linear, 
+                reference = testing_data$diabetes)
+
+plot(best.linear, training_data, 
+     glucose ~ mass,
+     slice = list(pregnant = 5, triceps = 20,
+                  insulin = 20, pressure = 75,
+                  pedigree = 1, age = 50),
+     grid = 100)
+```
+
+### Radial kernel
+
+Support vector machines can construct classification boundaries that are nonlinear in shape. We use the radial kernel.
+
+```{r}
+set.seed(1)
+radial.tune <- tune.svm(diabetes ~ . , 
+                        data = training_data, 
+                        kernel = "radial", 
+                        cost = exp(seq(1, 7, len = 50)),
+                        gamma = exp(seq(-10, -2,len = 20)))
+
+plot(radial.tune, transform.y = log, transform.x = log, 
+     color.palette = terrain.colors)
+# summary(radial.tune)
+
+radial.tune$best.parameters
+
+best.radial <- radial.tune$best.model
+summary(best.radial)
+
+pred.radial <- predict(best.radial, newdata = testing_data)
+
+confusionMatrix(data = pred.radial, 
+                reference = testing_data$diabetes)
+
+plot(best.radial, training_data, 
+     glucose ~ mass,
+     slice = list(pregnant = 5, triceps = 20,
+                  insulin = 20, pressure = 75,
+                  pedigree = 1, age = 50),
+     grid = 100,
+     symbolPalette = c("cyan","darkblue"),
+     color.palette = heat.colors)
+```   
+
+
+## Using `caret`
+
+```{r}
+ctrl <- trainControl(method = "cv")
+
+# kernlab
+set.seed(1)
+svml.fit <- train(diabetes ~ . , 
+                  data = training_data, 
+                  method = "svmLinear",
+                  tuneGrid = data.frame(C = exp(seq(-5, 2, len = 50))),
+                  trControl = ctrl)
+
+plot(svml.fit, highlight = TRUE, xTrans = log)
+
+# e1071
+set.seed(1)
+svml.fit2 <- train(diabetes ~ . , 
+                   data = training_data, 
+                   method = "svmLinear2",
+                   tuneGrid = data.frame(cost = exp(seq(-5, 2, len = 50))),
+                   trControl = ctrl)
+
+plot(svml.fit2, highlight = TRUE, xTrans = log)
+```
+
+
+```{r, fig.width=15, fig.height=8}
+svmr.grid <- expand.grid(C = exp(seq(1, 7, len = 50)),
+                         sigma = exp(seq(-10, -2, len = 20)))
+
+# tunes over both cost and sigma
+set.seed(1)             
+svmr.fit <- train(diabetes ~ . , data = training_data,
+                  method = "svmRadialSigma",
+                  tuneGrid = svmr.grid,
+                  trControl = ctrl)
+
+myCol <- rainbow(25)
+myPar <- list(superpose.symbol = list(col = myCol),
+              superpose.line = list(col = myCol))
+
+plot(svmr.fit, highlight = TRUE, par.settings = myPar)
+
+# tune over cost and uses a single value of sigma based on kernlab's sigest function
+set.seed(1)             
+svmr.fit2 <- train(diabetes ~ . , data = training_data,
+                   method = "svmRadialCost",
+                   tuneGrid = data.frame(C = exp(seq(-3, 3, len = 20))),
+                   trControl = ctrl)
+
+# Platt’s probabilistic outputs; use with caution
+set.seed(1)             
+svmr.fit3 <- train(diabetes ~ . , data = training_data,
+                   method = "svmRadialCost",
+                   tuneGrid = data.frame(C = exp(seq(-3, 3, len = 20))),
+                   trControl = ctrl,
+                   prob.model = TRUE) 
+# predict(svmr.fit3, newdata = x_test, type = "prob")
+```
+
+```{r}
+resamp <- resamples(list(svmr = svmr.fit, svmr2 = svmr.fit2,
+                         svml = svml.fit, svml2 = svml.fit2))
+
+summary(resamp)
+bwplot(resamp)
+```
+
+We finally look at the test data performance.
+```{r}
+pred.svml <- predict(svml.fit, newdata = testing_data)
+pred.svmr <- predict(svmr.fit, newdata = testing_data)
+
+confusionMatrix(data = pred.svml, 
+                reference = testing_data$diabetes)
+
+confusionMatrix(data = pred.svmr, 
+                reference = testing_data$diabetes)
+```
+
+
+
+## Using `tidymodels`
+
+```{r}
+set.seed(1)
+cv_folds <- vfold_cv(training_data)
+
+# Model specification
+svm_linear_spec <- svm_linear(cost = tune()) %>%
+  set_engine("kernlab") %>%
+  set_mode("classification")
+
+# svm_linear_spec %>% extract_parameter_dials("cost")
+
+# Create a grid of tuning parameters
+svm_linear_grid_set <- parameters(cost(range = c(-10, 5)))
+svm_linear_grid <- grid_regular(svm_linear_grid_set, levels = 50)
+
+# Create a workflow
+svm_linear_workflow <- workflow() %>%
+  add_model(svm_linear_spec) %>% 
+  add_formula(diabetes ~ .)
+
+# Tune the model
+svm_linear_tune <- tune_grid(
+  svm_linear_workflow,
+  resamples = cv_folds,
+  grid = svm_linear_grid)
+
+# Plot the results
+autoplot(svm_linear_tune, metric = "accuracy")
+
+svm_linear_best <- select_best(svm_linear_tune, metric = "accuracy")
+
+final_svm_linear_spec <- svm_linear_spec %>% 
+  update(cost = svm_linear_best$cost)
+
+svm_linear_fit <- fit(final_svm_linear_spec, formula = diabetes ~ ., data = training_data)
+
+svm_linear_model <- extract_fit_engine(svm_linear_fit)
+
+head(predict(svm_linear_fit, new_data = testing_data))
+```
+
+```{r}
+# Model specification
+svmrbf_spec <- svm_rbf(cost = tune(), rbf_sigma = tune()) %>%
+  set_engine("kernlab") %>%
+  set_mode("classification")
+
+# svmrbf_spec %>% extract_parameter_dials("cost")
+# svmrbf_spec %>% extract_parameter_dials("rbf_sigma")
+
+# Create a grid of tuning parameters
+svmrbf_grid_set <- parameters(cost(range = c(1, 10), trans = log_trans()), 
+                              rbf_sigma(range = c(-10, 0), trans = log_trans()))
+svmrbf_grid <- grid_regular(svmrbf_grid_set, levels = c(10, 20))
+
+# Create a workflow
+svmrbf_workflow <- workflow() %>%
+  add_model(svmrbf_spec) %>% 
+  add_formula(diabetes ~ .)
+
+# Tune the model
+svmrbf_tune <- tune_grid(
+  svmrbf_workflow,
+  resamples = cv_folds,
+  grid = svmrbf_grid)
+
+# Plot the results
+autoplot(svmrbf_tune, metric = "accuracy")
+
+svmrbf_best <- select_best(svmrbf_tune, metric = "accuracy")
+
+final_svmrbf_spec <- svmrbf_spec %>% 
+  update(cost = svmrbf_best$cost, rbf_sigma = svmrbf_best$rbf_sigma)
+
+svmrbf_fit <- fit(final_svmrbf_spec, formula = diabetes ~ ., data = training_data)
+
+svmrbf_model <- extract_fit_engine(svmrbf_fit)
+
+head(predict(svmrbf_fit, new_data = testing_data))
+```
+
+```{r}
+model_compare <- workflow_set(preproc = list(diabetes ~ .),
+                              models = list(svm_linear = final_svm_linear_spec, 
+                                            svm_rbf = final_svmrbf_spec)) %>% 
+  workflow_map(resamples = cv_folds)
+
+model_compare %>% collect_metrics() %>% filter(.metric == "accuracy")
+```
+
